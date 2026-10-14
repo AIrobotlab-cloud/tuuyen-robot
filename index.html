@@ -3,50 +3,51 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Robot Tử Uyên — Cyber Face Pro</title>
+    <title>Robot Tử Uyên — Cyber Face Pro V3.2</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
         body {
-            background-color: #030712; color: #f3f4f6;
+            background-color: #020617; color: #f3f4f6;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             height: 100vh; width: 100vw; overflow: hidden;
             display: flex; flex-direction: column; justify-content: space-between; align-items: center;
         }
         .top-bar {
-            width: 100%; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center;
-            font-size: 13px; letter-spacing: 1px; color: #64748b; border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            width: 100%; padding: 12px 18px; display: flex; justify-content: space-between; align-items: center;
+            font-size: 12px; letter-spacing: 1px; color: #64748b; border-bottom: 1px solid rgba(255, 255, 255, 0.05); z-index: 20;
         }
-        .status-badge { display: flex; align-items: center; gap: 8px; color: #38bdf8; font-weight: 600; }
-        .dot { width: 8px; height: 8px; background: #38bdf8; border-radius: 50%; box-shadow: 0 0 12px #38bdf8; animation: pulse 2s infinite; }
+        .status-badge { display: flex; align-items: center; gap: 6px; color: #38bdf8; font-weight: 600; }
+        .dot { width: 7px; height: 7px; background: #38bdf8; border-radius: 50%; box-shadow: 0 0 10px #38bdf8; animation: pulse 2s infinite; }
 
-        /* NÚT BẤM CHUYỂN ĐỔI 2 MODEL GPT */
-        .mode-toggle {
-            padding: 7px 14px; background: rgba(56, 189, 248, 0.12); border: 1px solid #0284c7;
-            border-radius: 20px; color: #38bdf8; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.25s;
+        .control-group { display: flex; gap: 8px; align-items: center; }
+        .select-btn, .mode-toggle {
+            padding: 6px 12px; background: rgba(15, 23, 42, 0.85); border: 1px solid #0284c7;
+            border-radius: 18px; color: #38bdf8; font-size: 11px; font-weight: 600; outline: none; cursor: pointer; transition: all 0.2s;
         }
-        .mode-toggle.pro { background: rgba(245, 158, 11, 0.18); border-color: #f59e0b; color: #fbbf24; box-shadow: 0 0 15px rgba(245, 158, 11, 0.3); }
+        .mode-toggle.pro { border-color: #f59e0b; color: #fbbf24; background: rgba(245, 158, 11, 0.18); box-shadow: 0 0 12px rgba(245, 158, 11, 0.25); }
 
+        /* KHU VỰC KHUÔN MẶT ROBOT CHIẾM TRỌN MÀN HÌNH */
         .face-container { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; width: 100%; position: relative; }
-        .eyebrows-wrapper { display: flex; gap: 90px; margin-bottom: 15px; }
-        .eyebrow { width: 90px; height: 8px; background: #38bdf8; border-radius: 4px; box-shadow: 0 0 15px rgba(56, 189, 248, 0.6); transition: all 0.3s; }
+        .eyebrows-wrapper { display: flex; gap: 90px; margin-bottom: 16px; }
+        .eyebrow { width: 95px; height: 9px; background: #38bdf8; border-radius: 5px; box-shadow: 0 0 18px rgba(56, 189, 248, 0.65); transition: all 0.3s; }
 
-        .eyes-wrapper { display: flex; gap: 60px; align-items: center; justify-content: center; position: relative; }
+        .eyes-wrapper { display: flex; gap: 65px; align-items: center; justify-content: center; position: relative; }
         .eye {
-            width: 135px; height: 135px;
+            width: 140px; height: 140px;
             background: radial-gradient(circle at 40% 40%, #38bdf8 0%, #0284c7 55%, #0369a1 100%);
-            border-radius: 42px; box-shadow: 0 0 50px rgba(56, 189, 248, 0.4), inset 0 0 25px rgba(255, 255, 255, 0.5);
+            border-radius: 44px; box-shadow: 0 0 55px rgba(56, 189, 248, 0.45), inset 0 0 25px rgba(255, 255, 255, 0.5);
             position: relative; transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); overflow: hidden;
         }
         .pupil {
-            position: absolute; width: 45px; height: 45px; background: rgba(255, 255, 255, 0.95);
-            border-radius: 50%; top: 25px; left: 25px; filter: blur(1px); transition: all 0.4s ease-out;
+            position: absolute; width: 48px; height: 48px; background: rgba(255, 255, 255, 0.95);
+            border-radius: 50%; top: 26px; left: 26px; filter: blur(1px); transition: all 0.4s ease-out;
         }
 
-        .eye.blink { height: 6px !important; margin-top: 64px; border-radius: 10px; }
+        .eye.blink { height: 6px !important; margin-top: 67px; border-radius: 10px; }
         .eye.blink .pupil { opacity: 0; }
 
         .state-listening .eyebrow { background: #22c55e; box-shadow: 0 0 20px #22c55e; transform: translateY(-8px); }
-        .state-listening .eye { background: radial-gradient(circle at 40% 40%, #4ade80 0%, #22c55e 60%, #15803d 100%); box-shadow: 0 0 60px rgba(34, 197, 94, 0.6); transform: scale(1.06); }
+        .state-listening .eye { background: radial-gradient(circle at 40% 40%, #4ade80 0%, #22c55e 60%, #15803d 100%); box-shadow: 0 0 60px rgba(34, 197, 94, 0.6); transform: scale(1.05); }
 
         .state-thinking .eyebrow.left { transform: rotate(12deg) translateY(4px); background: #f59e0b; box-shadow: 0 0 20px #f59e0b; }
         .state-thinking .eyebrow.right { transform: rotate(-12deg) translateY(4px); background: #f59e0b; box-shadow: 0 0 20px #f59e0b; }
@@ -54,7 +55,7 @@
         .state-thinking .pupil { transform: translate(15px, -10px); }
 
         .state-speaking .eye { animation: speakingPulse 0.35s infinite alternate ease-in-out; }
-        @keyframes speakingPulse { 0% { height: 120px; } 100% { height: 145px; } }
+        @keyframes speakingPulse { 0% { height: 125px; } 100% { height: 150px; } }
 
         .visualizer { display: flex; gap: 7px; height: 35px; align-items: center; margin-top: 35px; }
         .bar { width: 6px; height: 6px; background: #38bdf8; border-radius: 4px; }
@@ -64,22 +65,24 @@
         .bar:nth-child(5) { animation-delay: 0.15s; }
         @keyframes audioWave { 0% { height: 6px; } 100% { height: 32px; background: #7dd3fc; } }
 
-        .dialogue-box {
-            width: 90%; max-width: 620px; min-height: 70px; padding: 16px 22px;
-            background: rgba(15, 23, 42, 0.75); backdrop-filter: blur(14px);
-            border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 18px;
-            text-align: center; font-size: 16px; line-height: 1.6; color: #e2e8f0; margin-bottom: 20px;
+        /* PHỤ ĐỀ MỜ NHỎ TINH TẾ (THAY THẾ HỘP CHỮ TO DÀI DÒNG) */
+        .subtitle-text {
+            width: 85%; max-width: 550px; min-height: 24px; text-align: center;
+            font-size: 13px; color: #94a3b8; font-style: italic; opacity: 0.8;
+            margin-bottom: 12px; transition: opacity 0.3s;
         }
-        .controls { width: 100%; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+
+        .controls { width: 100%; padding: 18px; display: flex; flex-direction: column; align-items: center; gap: 10px; z-index: 20; }
         .mic-btn {
-            width: 76px; height: 76px; border-radius: 50%;
+            width: 74px; height: 74px; border-radius: 50%;
             background: linear-gradient(135deg, #0284c7, #0369a1); border: none; color: white;
             display: flex; justify-content: center; align-items: center; cursor: pointer;
             box-shadow: 0 0 30px rgba(2, 132, 199, 0.45); transition: all 0.2s;
         }
         .mic-btn:active { transform: scale(0.92); }
         .mic-btn.active { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 0 35px rgba(239, 68, 68, 0.7); animation: pulse-red 1.5s infinite; }
-        .hint-text { font-size: 13px; color: #94a3b8; }
+        .hint-text { font-size: 12px; color: #64748b; }
+
         @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; } }
         @keyframes pulse-red { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
     </style>
@@ -87,8 +90,17 @@
 <body class="state-idle">
     <div class="top-bar">
         <div class="status-badge"><div class="dot"></div><span id="status-text">TRỰC GÁC</span></div>
-        <!-- NÚT CHUYỂN ĐỔI LINH HOẠT 2 MODEL GPT -->
-        <button class="mode-toggle" id="mode-btn" onclick="toggleModelMode()">⚡ Huấn luyện (GPT-4o-mini ~2đ)</button>
+        <div class="control-group">
+            <!-- MENU LỰA CHỌN 4 GIỌNG NÓI -->
+            <select class="select-btn" id="voice-select">
+                <option value="vip_taothao">👑 VIP Tào Tháo (Bá Nghị Clone)</option>
+                <option value="nam_minh">🎙️ Nam Minh (Trầm Binh Gia - 0đ)</option>
+                <option value="hoai_my">🌸 Hoài My (Nữ Thanh Thoát - 0đ)</option>
+                <option value="vip_nu">👑 VIP Nữ Cổ Trang</option>
+            </select>
+            <!-- NÚT CHUYỂN ĐỔI 2 MODEL GPT -->
+            <button class="mode-toggle" id="mode-btn" onclick="toggleModelMode()">⚡ Huấn luyện (~2đ)</button>
+        </div>
     </div>
 
     <div class="face-container">
@@ -105,7 +117,8 @@
         </div>
     </div>
 
-    <div class="dialogue-box" id="dialogue-text">Chạm vào Micro để bắt đầu đàm đạo cùng Tử Uyên...</div>
+    <!-- DÒNG PHỤ ĐỀ TINH TẾ -->
+    <div class="subtitle-text" id="subtitle-box">Sẵn sàng lắng nghe...</div>
 
     <div class="controls">
         <button class="mic-btn" id="mic-btn" onclick="toggleVoiceSession()">
@@ -125,32 +138,50 @@
         const pupilLeft = document.getElementById('pupil-left');
         const pupilRight = document.getElementById('pupil-right');
         const statusText = document.getElementById('status-text');
-        const dialogueText = document.getElementById('dialogue-text');
+        const subtitleBox = document.getElementById('subtitle-box');
         const micBtn = document.getElementById('mic-btn');
         const hintText = document.getElementById('hint-text');
         const modeBtn = document.getElementById('mode-btn');
+        const voiceSelect = document.getElementById('voice-select');
 
-        // KHỞI TẠO BỘ PHÁT ÂM THANH SERVER NGUYÊN BẢN
         let audioPlayer = new Audio();
-        let currentModel = 'gpt-4o-mini'; // Mặc định chế độ Huấn luyện siêu rẻ
+        let currentModel = 'gpt-4o-mini'; // Mặc định huấn luyện tiết kiệm
         let isListening = false;
         let recognition = null;
+        let wakeLock = null;
 
-        // CHUYỂN ĐỔI QUA LẠI GIỮA 2 MÔ HÌNH GPT
+        // 1. TÍNH NĂNG WAKE LOCK (GIỮ MÀN HÌNH ĐIỆN THOẠI LUÔN SÁNG)
+        async function requestWakeLock() {
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                }
+            } catch (err) {
+                console.log("Wake Lock không khả dụng:", err);
+            }
+        }
+        document.addEventListener('visibilitychange', () => {
+            if (wakeLock !== null && document.visibilityState === 'visible') {
+                requestWakeLock();
+            }
+        });
+
+        // 2. CHUYỂN ĐỔI LINH HOẠT 2 MODEL GPT
         function toggleModelMode() {
             if (currentModel === 'gpt-4o-mini') {
                 currentModel = 'gpt-4o';
                 modeBtn.classList.add('pro');
                 modeBtn.innerText = "👑 Demo (GPT-4o Đỉnh Cao)";
-                dialogueText.innerText = "Đã chuyển sang chế độ DEMO: Sử dụng mô hình GPT-4o cao cấp nhất.";
+                subtitleBox.innerText = "Đã chuyển sang chế độ DEMO: Mô hình GPT-4o cao cấp nhất.";
             } else {
                 currentModel = 'gpt-4o-mini';
                 modeBtn.classList.remove('pro');
                 modeBtn.innerText = "⚡ Huấn luyện (GPT-4o-mini ~2đ)";
-                dialogueText.innerText = "Đã chuyển sang chế độ HUẤN LUYỆN: Sử dụng GPT-4o-mini siêu tiết kiệm (~2đ/câu).";
+                subtitleBox.innerText = "Đã chuyển sang chế độ HUẤN LUYỆN: GPT-4o-mini siêu tiết kiệm (~2đ/câu).";
             }
         }
 
+        // 3. CHỚP MẮT & LIẾC MẮT TỰ NHIÊN
         function triggerBlink() {
             if (!body.classList.contains('state-speaking')) {
                 eyeLeft.classList.add('blink'); eyeRight.classList.add('blink');
@@ -171,6 +202,7 @@
         }
         triggerLookAround();
 
+        // 4. NHẬN DIỆN GIỌNG NÓI DI ĐỘNG
         if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
             const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
             recognition = new SpeechRec();
@@ -180,12 +212,12 @@
             recognition.onstart = () => {
                 setRobotState('listening');
                 statusText.innerText = "LẮNG NGHE";
-                dialogueText.innerText = "Đang lắng nghe đạo hữu...";
+                subtitleBox.innerText = "Đang lắng nghe...";
             };
 
             recognition.onresult = (event) => {
                 const userQuery = event.results[0][0].transcript;
-                dialogueText.innerText = `Đạo hữu: "${userQuery}"`;
+                subtitleBox.innerText = `Đạo hữu: "${userQuery}"`;
                 handleUserSpeech(userQuery);
             };
 
@@ -213,7 +245,7 @@
         }
 
         function toggleVoiceSession() {
-            // Mở khóa âm thanh trên điện thoại khi người dùng chạm vào micro
+            requestWakeLock(); // Kích hoạt giữ màn hình sáng
             audioPlayer.load();
 
             if (!recognition) return;
@@ -240,18 +272,20 @@
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: query, model: currentModel })
+                    body: JSON.stringify({ 
+                        message: query, 
+                        model: currentModel,
+                        voice: voiceSelect.value 
+                    })
                 });
 
-                if (!response.ok) {
-                    throw new Error(`Mã lỗi máy chủ: ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const data = await response.json();
                 const replyText = data.reply;
-                dialogueText.innerText = `Tử Uyên: "${replyText}"`;
+                subtitleBox.innerText = `Tử Uyên: "${replyText}"`;
 
-                // PHÁT FILE ÂM THANH BẢN SỐ 2 (TÀO THÁO) TRỰC TIẾP TỪ SERVER
+                // PHÁT ÂM THANH TRỰC TIẾP TỪ SERVER
                 if (data.audio) {
                     setRobotState('speaking');
                     statusText.innerText = "CẤT TIẾNG";
@@ -262,7 +296,7 @@
                         if (isListening) setTimeout(() => { if (isListening) recognition.start(); }, 800);
                     };
                     audioPlayer.play().catch(e => {
-                        console.error("Lỗi phát loa ngoài:", e);
+                        console.error("Lỗi phát loa:", e);
                         setRobotState('idle');
                         statusText.innerText = "TRỰC GÁC";
                     });
@@ -272,8 +306,7 @@
                 }
 
             } catch (err) {
-                console.error("Lỗi:", err);
-                dialogueText.innerText = `Lỗi kết nối: ${err.message || 'Không thể liên lạc máy chủ'}`;
+                subtitleBox.innerText = `Lỗi kết nối: ${err.message || 'Không thể liên lạc'}`;
                 setRobotState('idle');
                 statusText.innerText = "TRỰC GÁC";
             }
