@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Robot Tử Uyên — Cyber Face Pro V3.2</title>
+    <title>Robot Tử Uyên — Pure Cyber Face</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
         body {
@@ -13,7 +13,7 @@
             display: flex; flex-direction: column; justify-content: space-between; align-items: center;
         }
         .top-bar {
-            width: 100%; padding: 12px 18px; display: flex; justify-content: space-between; align-items: center;
+            width: 100%; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center;
             font-size: 12px; letter-spacing: 1px; color: #64748b; border-bottom: 1px solid rgba(255, 255, 255, 0.05); z-index: 20;
         }
         .status-badge { display: flex; align-items: center; gap: 6px; color: #38bdf8; font-weight: 600; }
@@ -22,11 +22,11 @@
         .control-group { display: flex; gap: 8px; align-items: center; }
         .select-btn, .mode-toggle {
             padding: 6px 12px; background: rgba(15, 23, 42, 0.85); border: 1px solid #0284c7;
-            border-radius: 18px; color: #38bdf8; font-size: 11px; font-weight: 600; outline: none; cursor: pointer; transition: all 0.2s;
+            border-radius: 18px; color: #38bdf8; font-size: 11px; font-weight: 600; outline: none; cursor: pointer;
         }
-        .mode-toggle.pro { border-color: #f59e0b; color: #fbbf24; background: rgba(245, 158, 11, 0.18); box-shadow: 0 0 12px rgba(245, 158, 11, 0.25); }
+        .mode-toggle.pro { border-color: #f59e0b; color: #fbbf24; background: rgba(245, 158, 11, 0.18); }
 
-        /* KHU VỰC KHUÔN MẶT ROBOT CHIẾM TRỌN MÀN HÌNH */
+        /* KHU VỰC KHUÔN MẶT ROBOT TOÀN MÀN HÌNH */
         .face-container { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; width: 100%; position: relative; }
         .eyebrows-wrapper { display: flex; gap: 90px; margin-bottom: 16px; }
         .eyebrow { width: 95px; height: 9px; background: #38bdf8; border-radius: 5px; box-shadow: 0 0 18px rgba(56, 189, 248, 0.65); transition: all 0.3s; }
@@ -57,7 +57,7 @@
         .state-speaking .eye { animation: speakingPulse 0.35s infinite alternate ease-in-out; }
         @keyframes speakingPulse { 0% { height: 125px; } 100% { height: 150px; } }
 
-        .visualizer { display: flex; gap: 7px; height: 35px; align-items: center; margin-top: 35px; }
+        .visualizer { display: flex; gap: 7px; height: 35px; align-items: center; margin-top: 40px; }
         .bar { width: 6px; height: 6px; background: #38bdf8; border-radius: 4px; }
         .state-speaking .bar { animation: audioWave 0.4s infinite alternate ease-in-out; }
         .bar:nth-child(1) { animation-delay: 0.1s; } .bar:nth-child(2) { animation-delay: 0.25s; }
@@ -65,23 +65,16 @@
         .bar:nth-child(5) { animation-delay: 0.15s; }
         @keyframes audioWave { 0% { height: 6px; } 100% { height: 32px; background: #7dd3fc; } }
 
-        /* PHỤ ĐỀ MỜ NHỎ TINH TẾ (THAY THẾ HỘP CHỮ TO DÀI DÒNG) */
-        .subtitle-text {
-            width: 85%; max-width: 550px; min-height: 24px; text-align: center;
-            font-size: 13px; color: #94a3b8; font-style: italic; opacity: 0.8;
-            margin-bottom: 12px; transition: opacity 0.3s;
-        }
-
-        .controls { width: 100%; padding: 18px; display: flex; flex-direction: column; align-items: center; gap: 10px; z-index: 20; }
+        /* KHÔNG CÒN BẤT KỲ HỘP CHỮ NÀO TRÊN MÀN HÌNH */
+        .controls { width: 100%; padding: 24px; display: flex; flex-direction: column; align-items: center; z-index: 20; }
         .mic-btn {
-            width: 74px; height: 74px; border-radius: 50%;
+            width: 76px; height: 76px; border-radius: 50%;
             background: linear-gradient(135deg, #0284c7, #0369a1); border: none; color: white;
             display: flex; justify-content: center; align-items: center; cursor: pointer;
             box-shadow: 0 0 30px rgba(2, 132, 199, 0.45); transition: all 0.2s;
         }
         .mic-btn:active { transform: scale(0.92); }
         .mic-btn.active { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 0 35px rgba(239, 68, 68, 0.7); animation: pulse-red 1.5s infinite; }
-        .hint-text { font-size: 12px; color: #64748b; }
 
         @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; } }
         @keyframes pulse-red { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
@@ -91,14 +84,11 @@
     <div class="top-bar">
         <div class="status-badge"><div class="dot"></div><span id="status-text">TRỰC GÁC</span></div>
         <div class="control-group">
-            <!-- MENU LỰA CHỌN 4 GIỌNG NÓI -->
             <select class="select-btn" id="voice-select">
-                <option value="vip_taothao">👑 VIP Tào Tháo (Bá Nghị Clone)</option>
-                <option value="nam_minh">🎙️ Nam Minh (Trầm Binh Gia - 0đ)</option>
-                <option value="hoai_my">🌸 Hoài My (Nữ Thanh Thoát - 0đ)</option>
-                <option value="vip_nu">👑 VIP Nữ Cổ Trang</option>
+                <option value="vip_taothao">👑 VIP Tào Tháo (Bá Nghị)</option>
+                <option value="nam_minh">🎙️ Nam Minh (Trầm Binh Gia)</option>
+                <option value="hoai_my">🌸 Hoài My (Nữ Thanh Thoát)</option>
             </select>
-            <!-- NÚT CHUYỂN ĐỔI 2 MODEL GPT -->
             <button class="mode-toggle" id="mode-btn" onclick="toggleModelMode()">⚡ Huấn luyện (~2đ)</button>
         </div>
     </div>
@@ -117,9 +107,6 @@
         </div>
     </div>
 
-    <!-- DÒNG PHỤ ĐỀ TINH TẾ -->
-    <div class="subtitle-text" id="subtitle-box">Sẵn sàng lắng nghe...</div>
-
     <div class="controls">
         <button class="mic-btn" id="mic-btn" onclick="toggleVoiceSession()">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -128,8 +115,9 @@
                 <line x1="12" y1="19" x2="12" y2="22"></line>
             </svg>
         </button>
-        <span class="hint-text" id="hint-text">Chạm để mở đàm thoại rảnh tay hai chiều</span>
     </div>
+
+    <audio id="server-audio" style="display: none;"></audio>
 
     <script>
         const body = document.body;
@@ -138,50 +126,39 @@
         const pupilLeft = document.getElementById('pupil-left');
         const pupilRight = document.getElementById('pupil-right');
         const statusText = document.getElementById('status-text');
-        const subtitleBox = document.getElementById('subtitle-box');
         const micBtn = document.getElementById('mic-btn');
-        const hintText = document.getElementById('hint-text');
         const modeBtn = document.getElementById('mode-btn');
         const voiceSelect = document.getElementById('voice-select');
+        const serverAudio = document.getElementById('server-audio');
 
-        let audioPlayer = new Audio();
-        let currentModel = 'gpt-4o-mini'; // Mặc định huấn luyện tiết kiệm
+        let currentModel = 'gpt-4o-mini';
         let isListening = false;
         let recognition = null;
         let wakeLock = null;
 
-        // 1. TÍNH NĂNG WAKE LOCK (GIỮ MÀN HÌNH ĐIỆN THOẠI LUÔN SÁNG)
         async function requestWakeLock() {
             try {
                 if ('wakeLock' in navigator) {
                     wakeLock = await navigator.wakeLock.request('screen');
                 }
-            } catch (err) {
-                console.log("Wake Lock không khả dụng:", err);
-            }
+            } catch (err) { }
         }
         document.addEventListener('visibilitychange', () => {
-            if (wakeLock !== null && document.visibilityState === 'visible') {
-                requestWakeLock();
-            }
+            if (wakeLock !== null && document.visibilityState === 'visible') requestWakeLock();
         });
 
-        // 2. CHUYỂN ĐỔI LINH HOẠT 2 MODEL GPT
         function toggleModelMode() {
             if (currentModel === 'gpt-4o-mini') {
                 currentModel = 'gpt-4o';
                 modeBtn.classList.add('pro');
-                modeBtn.innerText = "👑 Demo (GPT-4o Đỉnh Cao)";
-                subtitleBox.innerText = "Đã chuyển sang chế độ DEMO: Mô hình GPT-4o cao cấp nhất.";
+                modeBtn.innerText = "👑 Demo (GPT-4o)";
             } else {
                 currentModel = 'gpt-4o-mini';
                 modeBtn.classList.remove('pro');
-                modeBtn.innerText = "⚡ Huấn luyện (GPT-4o-mini ~2đ)";
-                subtitleBox.innerText = "Đã chuyển sang chế độ HUẤN LUYỆN: GPT-4o-mini siêu tiết kiệm (~2đ/câu).";
+                modeBtn.innerText = "⚡ Huấn luyện (~2đ)";
             }
         }
 
-        // 3. CHỚP MẮT & LIẾC MẮT TỰ NHIÊN
         function triggerBlink() {
             if (!body.classList.contains('state-speaking')) {
                 eyeLeft.classList.add('blink'); eyeRight.classList.add('blink');
@@ -202,7 +179,6 @@
         }
         triggerLookAround();
 
-        // 4. NHẬN DIỆN GIỌNG NÓI DI ĐỘNG
         if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
             const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
             recognition = new SpeechRec();
@@ -212,17 +188,14 @@
             recognition.onstart = () => {
                 setRobotState('listening');
                 statusText.innerText = "LẮNG NGHE";
-                subtitleBox.innerText = "Đang lắng nghe...";
             };
 
             recognition.onresult = (event) => {
                 const userQuery = event.results[0][0].transcript;
-                subtitleBox.innerText = `Đạo hữu: "${userQuery}"`;
                 handleUserSpeech(userQuery);
             };
 
-            recognition.onerror = (e) => {
-                console.error(e);
+            recognition.onerror = () => {
                 setRobotState('idle');
                 statusText.innerText = "TRỰC GÁC";
             };
@@ -245,19 +218,17 @@
         }
 
         function toggleVoiceSession() {
-            requestWakeLock(); // Kích hoạt giữ màn hình sáng
-            audioPlayer.load();
+            requestWakeLock();
+            serverAudio.load();
 
             if (!recognition) return;
             if (!isListening) {
                 isListening = true;
                 micBtn.classList.add('active');
-                hintText.innerText = "Đang mở micro — Hãy nói tự nhiên";
                 recognition.start();
             } else {
                 isListening = false;
                 micBtn.classList.remove('active');
-                hintText.innerText = "Chạm để bắt đầu nói";
                 recognition.stop();
                 setRobotState('idle');
                 statusText.innerText = "TRỰC GÁC";
@@ -282,21 +253,17 @@
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const data = await response.json();
-                const replyText = data.reply;
-                subtitleBox.innerText = `Tử Uyên: "${replyText}"`;
 
-                // PHÁT ÂM THANH TRỰC TIẾP TỪ SERVER
                 if (data.audio) {
                     setRobotState('speaking');
                     statusText.innerText = "CẤT TIẾNG";
-                    audioPlayer.src = "data:audio/mp3;base64," + data.audio;
-                    audioPlayer.onended = () => {
+                    serverAudio.src = "data:audio/mp3;base64," + data.audio;
+                    serverAudio.onended = () => {
                         setRobotState('idle');
                         statusText.innerText = "TRỰC GÁC";
                         if (isListening) setTimeout(() => { if (isListening) recognition.start(); }, 800);
                     };
-                    audioPlayer.play().catch(e => {
-                        console.error("Lỗi phát loa:", e);
+                    serverAudio.play().catch(e => {
                         setRobotState('idle');
                         statusText.innerText = "TRỰC GÁC";
                     });
@@ -306,7 +273,6 @@
                 }
 
             } catch (err) {
-                subtitleBox.innerText = `Lỗi kết nối: ${err.message || 'Không thể liên lạc'}`;
                 setRobotState('idle');
                 statusText.innerText = "TRỰC GÁC";
             }
