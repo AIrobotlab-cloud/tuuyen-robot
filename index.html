@@ -19,15 +19,12 @@
         .status-badge { display: flex; align-items: center; gap: 8px; color: #38bdf8; font-weight: 600; }
         .dot { width: 8px; height: 8px; background: #38bdf8; border-radius: 50%; box-shadow: 0 0 12px #38bdf8; animation: pulse 2s infinite; }
 
-        /* NÚT CHUYỂN ĐỔI CHẾ ĐỘ TIẾT KIỆM / CAO CẤP */
+        /* NÚT BẤM CHUYỂN ĐỔI 2 MODEL GPT */
         .mode-toggle {
-            padding: 6px 12px; background: rgba(56, 189, 248, 0.1); border: 1px solid #0284c7;
-            border-radius: 20px; color: #38bdf8; font-size: 12px; font-weight: 600; cursor: pointer;
-            transition: all 0.2s;
+            padding: 7px 14px; background: rgba(56, 189, 248, 0.12); border: 1px solid #0284c7;
+            border-radius: 20px; color: #38bdf8; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.25s;
         }
-        .mode-toggle.pro {
-            background: rgba(245, 158, 11, 0.15); border-color: #f59e0b; color: #fbbf24;
-        }
+        .mode-toggle.pro { background: rgba(245, 158, 11, 0.18); border-color: #f59e0b; color: #fbbf24; box-shadow: 0 0 15px rgba(245, 158, 11, 0.3); }
 
         .face-container { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; width: 100%; position: relative; }
         .eyebrows-wrapper { display: flex; gap: 90px; margin-bottom: 15px; }
@@ -90,8 +87,8 @@
 <body class="state-idle">
     <div class="top-bar">
         <div class="status-badge"><div class="dot"></div><span id="status-text">TRỰC GÁC</span></div>
-        <!-- NÚT BẤM CHUYỂN ĐỔI MODEL -->
-        <button class="mode-toggle" id="mode-btn" onclick="toggleModelMode()">⚡ Huấn luyện (~2đ)</button>
+        <!-- NÚT CHUYỂN ĐỔI LINH HOẠT 2 MODEL GPT -->
+        <button class="mode-toggle" id="mode-btn" onclick="toggleModelMode()">⚡ Huấn luyện (GPT-4o-mini ~2đ)</button>
     </div>
 
     <div class="face-container">
@@ -133,23 +130,24 @@
         const hintText = document.getElementById('hint-text');
         const modeBtn = document.getElementById('mode-btn');
 
-        let currentModel = 'qwen-flash'; // Mặc định siêu rẻ
+        // KHỞI TẠO BỘ PHÁT ÂM THANH SERVER NGUYÊN BẢN
+        let audioPlayer = new Audio();
+        let currentModel = 'gpt-4o-mini'; // Mặc định chế độ Huấn luyện siêu rẻ
         let isListening = false;
         let recognition = null;
-        let speechSynth = window.speechSynthesis;
 
-        // BẬT / TẮT CHẾ ĐỘ MODEL
+        // CHUYỂN ĐỔI QUA LẠI GIỮA 2 MÔ HÌNH GPT
         function toggleModelMode() {
-            if (currentModel === 'qwen-flash') {
+            if (currentModel === 'gpt-4o-mini') {
                 currentModel = 'gpt-4o';
                 modeBtn.classList.add('pro');
-                modeBtn.innerText = "👑 Demo (GPT-4o)";
-                dialogueText.innerText = "Đã chuyển sang chế độ DEMO (Mô hình GPT-4o cao cấp).";
+                modeBtn.innerText = "👑 Demo (GPT-4o Đỉnh Cao)";
+                dialogueText.innerText = "Đã chuyển sang chế độ DEMO: Sử dụng mô hình GPT-4o cao cấp nhất.";
             } else {
-                currentModel = 'qwen-flash';
+                currentModel = 'gpt-4o-mini';
                 modeBtn.classList.remove('pro');
-                modeBtn.innerText = "⚡ Huấn luyện (~2đ)";
-                dialogueText.innerText = "Đã chuyển sang chế độ HUẤN LUYỆN (Mô hình Qwen-Flash siêu tiết kiệm).";
+                modeBtn.innerText = "⚡ Huấn luyện (GPT-4o-mini ~2đ)";
+                dialogueText.innerText = "Đã chuyển sang chế độ HUẤN LUYỆN: Sử dụng GPT-4o-mini siêu tiết kiệm (~2đ/câu).";
             }
         }
 
@@ -166,8 +164,8 @@
             if (body.classList.contains('state-idle')) {
                 const offsetX = (Math.random() - 0.5) * 30;
                 const offsetY = (Math.random() - 0.5) * 20;
-                pupilLeft.style.transform = `translate(${offsetX}px,${offsetY}px)`;
-                pupilRight.style.transform = `translate(${offsetX}px,${offsetY}px)`;
+                pupilLeft.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+                pupilRight.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
             }
             setTimeout(triggerLookAround, Math.random() * 4000 + 3000);
         }
@@ -215,6 +213,9 @@
         }
 
         function toggleVoiceSession() {
+            // Mở khóa âm thanh trên điện thoại khi người dùng chạm vào micro
+            audioPlayer.load();
+
             if (!recognition) return;
             if (!isListening) {
                 isListening = true;
@@ -243,13 +244,32 @@
                 });
 
                 if (!response.ok) {
-                    throw new Error(`Mã phản hồi HTTP ${response.status}`);
+                    throw new Error(`Mã lỗi máy chủ: ${response.status}`);
                 }
 
                 const data = await response.json();
                 const replyText = data.reply;
                 dialogueText.innerText = `Tử Uyên: "${replyText}"`;
-                speakResponse(replyText);
+
+                // PHÁT FILE ÂM THANH BẢN SỐ 2 (TÀO THÁO) TRỰC TIẾP TỪ SERVER
+                if (data.audio) {
+                    setRobotState('speaking');
+                    statusText.innerText = "CẤT TIẾNG";
+                    audioPlayer.src = "data:audio/mp3;base64," + data.audio;
+                    audioPlayer.onended = () => {
+                        setRobotState('idle');
+                        statusText.innerText = "TRỰC GÁC";
+                        if (isListening) setTimeout(() => { if (isListening) recognition.start(); }, 800);
+                    };
+                    audioPlayer.play().catch(e => {
+                        console.error("Lỗi phát loa ngoài:", e);
+                        setRobotState('idle');
+                        statusText.innerText = "TRỰC GÁC";
+                    });
+                } else {
+                    setRobotState('idle');
+                    statusText.innerText = "TRỰC GÁC";
+                }
 
             } catch (err) {
                 console.error("Lỗi:", err);
@@ -257,27 +277,6 @@
                 setRobotState('idle');
                 statusText.innerText = "TRỰC GÁC";
             }
-        }
-
-        function speakResponse(text) {
-            setRobotState('speaking');
-            statusText.innerText = "CẤT TIẾNG";
-
-            const cleanText = text.replace(/[*#`]/g, '');
-            const utter = new SpeechSynthesisUtterance(cleanText);
-            utter.lang = 'vi-VN';
-            utter.rate = 0.95;
-            utter.pitch = 0.85;
-
-            utter.onend = () => {
-                setRobotState('idle');
-                statusText.innerText = "TRỰC GÁC";
-                if (isListening) {
-                    setTimeout(() => { if (isListening) recognition.start(); }, 800);
-                }
-            };
-
-            speechSynth.speak(utter);
         }
     </script>
 </body>
