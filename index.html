@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Robot Tử Uyên — Pure Cyber Face V3.6</title>
+    <title>Robot Tử Uyên — Pure Cyber Face</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-user-select: none; }
         body {
@@ -26,7 +26,7 @@
         }
         .mode-toggle.pro { border-color: #f59e0b; color: #fbbf24; background: rgba(245, 158, 11, 0.18); }
 
-        /* KHU VỰC KHUÔN MẶT ROBOT TOÀN MÀN HÌNH (KHÔNG CHỮ) */
+        /* KHU VỰC KHUÔN MẶT ROBOT TOÀN MÀN HÌNH */
         .face-container { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; width: 100%; position: relative; }
         .eyebrows-wrapper { display: flex; gap: 90px; margin-bottom: 16px; }
         .eyebrow { width: 95px; height: 9px; background: #38bdf8; border-radius: 5px; box-shadow: 0 0 18px rgba(56, 189, 248, 0.65); transition: all 0.3s; }
@@ -84,15 +84,15 @@
         <div class="status-badge"><div class="dot"></div><span id="status-text">TRỰC GÁC</span></div>
         <div class="control-group">
             <select class="select-btn" id="voice-select">
-                <option value="vip_taothao">👑 VIP Tào Tháo (Bá Nghị)</option>
                 <option value="nam_minh">🎙️ Nam Minh (Trầm Binh Gia)</option>
+                <option value="vip_taothao">👑 VIP Tào Tháo (Bá Nghị)</option>
                 <option value="hoai_my">🌸 Hoài My (Nữ Thanh Thoát)</option>
             </select>
             <button class="mode-toggle" id="mode-btn" onclick="toggleModelMode()">⚡ Huấn luyện (~2đ)</button>
         </div>
     </div>
 
-    <div class="face-container" onclick="keepScreenAwakeAndUnlock()">
+    <div class="face-container">
         <div class="eyebrows-wrapper">
             <div class="eyebrow left" id="eyebrow-left"></div>
             <div class="eyebrow right" id="eyebrow-right"></div>
@@ -116,7 +116,7 @@
         </button>
     </div>
 
-    <audio id="server-audio" style="display: none;" playsinline preload="auto"></audio>
+    <audio id="server-audio" style="display: none;" playsinline></audio>
 
     <script>
         const body = document.body;
@@ -132,48 +132,24 @@
 
         let currentModel = 'gpt-4o-mini';
         let isListening = false;
+        let isBusy = false;
         let recognition = null;
         let wakeLock = null;
-        let isAudioUnlocked = false;
-        let silenceStandbyTimer = null;
-        let speechPauseTimer = null;
-        let accumulatedTranscript = "";
 
-        // 1. GIỮ MÀN HÌNH ĐIỆN THOẠI LUÔN SÁNG (WAKE LOCK + AUTO RE-ACQUIRE MỖI 10 GIÂY)
+        // 1. GIỮ MÀN HÌNH ĐIỆN THOẠI LUÔN SÁNG
         async function requestWakeLock() {
             try {
                 if ('wakeLock' in navigator && (!wakeLock || wakeLock.released)) {
                     wakeLock = await navigator.wakeLock.request('screen');
-                    wakeLock.addEventListener('release', () => { wakeLock = null; });
                 }
-            } catch (err) {}
+            } catch (err) { }
         }
-
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') requestWakeLock();
         });
         document.addEventListener('touchstart', () => { requestWakeLock(); }, { passive: true });
-        setInterval(() => {
-            if (document.visibilityState === 'visible') requestWakeLock();
-        }, 10000);
-
-        // 2. MỞ KHÓA KÊNH LOA DI ĐỘNG NGAY CÚ CHẠM ĐẦU TIÊN (CHỐNG LỖI CÂM TIẾNG)
-        function unlockAudio() {
-            if (!isAudioUnlocked) {
-                serverAudio.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
-                serverAudio.play().then(() => {
-                    isAudioUnlocked = true;
-                }).catch(() => {});
-            }
-        }
-
-        function keepScreenAwakeAndUnlock() {
-            requestWakeLock();
-            unlockAudio();
-        }
 
         function toggleModelMode() {
-            keepScreenAwakeAndUnlock();
             if (currentModel === 'gpt-4o-mini') {
                 currentModel = 'gpt-4o';
                 modeBtn.classList.add('pro');
@@ -185,7 +161,6 @@
             }
         }
 
-        // 3. HIỆU ỨNG CHỚP MẮT & ĐẢO ĐỒNG TỬ TỰ NHIÊN
         function triggerBlink() {
             if (!body.classList.contains('state-speaking')) {
                 eyeLeft.classList.add('blink'); eyeRight.classList.add('blink');
@@ -222,137 +197,90 @@
             }
         }
 
-        // 4. BỘ ĐẾM NGHỈ CHỜ THÔNG MINH (15 GIÂY KHÔNG NÓI THÌ VỀ TRỰC GÁC, KHÔNG BAO GIỜ TỰ NGHĨ)
-        function resetSilenceStandby() {
-            clearTimeout(silenceStandbyTimer);
-            if (isListening) {
-                silenceStandbyTimer = setTimeout(() => {
-                    if (isListening && !body.classList.contains('state-thinking') && !body.classList.contains('state-speaking')) {
-                        stopListeningSession();
-                    }
-                }, 15000);
-            }
-        }
-
-        function stopListeningSession() {
-            isListening = false;
-            clearTimeout(silenceStandbyTimer);
-            clearTimeout(speechPauseTimer);
-            accumulatedTranscript = "";
-            micBtn.classList.remove('active');
-            if (recognition) {
-                try { recognition.stop(); } catch (e) {}
-            }
-            setRobotState('idle');
-        }
-
-        function startListeningSession() {
-            if (!recognition) return;
-            accumulatedTranscript = "";
-            try {
-                recognition.start();
-                isListening = true;
-                micBtn.classList.add('active');
-                setRobotState('listening');
-                resetSilenceStandby();
-            } catch (e) {}
-        }
-
-        // 5. NHẬN DIỆN GIỌNG NÓI CHO PHÉP CÂU DÀI (ĐỢI NGỪNG NÓI 1.6 GIÂY MỚI CHỐT CÂU)
+        // 2. KHỞI TẠO NHẬN DIỆN GIỌNG NÓI ĐƠN PHIÊN CHUẨN XÁC (KHÔNG BAO GIỜ KẸT CÂU ĐẦU)
         if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
             const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
             recognition = new SpeechRec();
             recognition.lang = 'vi-VN';
-            recognition.continuous = true;
-            recognition.interimResults = true;
+            recognition.continuous = false;
+            recognition.interimResults = false;
 
             recognition.onstart = () => {
-                if (!body.classList.contains('state-thinking') && !body.classList.contains('state-speaking')) {
-                    setRobotState('listening');
-                    resetSilenceStandby();
-                }
+                isListening = true;
+                micBtn.classList.add('active');
+                setRobotState('listening');
             };
 
             recognition.onresult = (event) => {
-                clearTimeout(silenceStandbyTimer);
-                clearTimeout(speechPauseTimer);
-
-                let currentSessionText = "";
-                for (let i = 0; i < event.results.length; i++) {
-                    currentSessionText += event.results[i][0].transcript + " ";
-                }
-                accumulatedTranscript = currentSessionText.trim();
-
-                // Đợi đạo hữu ngừng nói 1.6 giây (để lấy hơi nói câu dài thoải mái) rồi mới gửi đi
-                if (accumulatedTranscript.length >= 2) {
-                    speechPauseTimer = setTimeout(() => {
-                        const finalQuery = accumulatedTranscript.trim();
-                        accumulatedTranscript = "";
-                        try { recognition.stop(); } catch (e) {}
-                        if (finalQuery.length >= 2) {
-                            handleUserSpeech(finalQuery);
-                        }
-                    }, 1600);
-                } else {
-                    resetSilenceStandby();
-                }
+                const lastIdx = event.results.length - 1;
+                const userQuery = event.results[lastIdx][0].transcript;
+                handleUserSpeech(userQuery);
             };
 
-            recognition.onerror = (e) => {
-                if (e.error === 'no-speech') {
-                    if (isListening) resetSilenceStandby();
+            recognition.onerror = () => {
+                if (!isBusy) {
+                    isListening = false;
+                    micBtn.classList.remove('active');
                     setRobotState('idle');
-                } else if (e.error !== 'aborted') {
-                    stopListeningSession();
                 }
             };
 
             recognition.onend = () => {
-                if (accumulatedTranscript && accumulatedTranscript.trim().length >= 2 && !body.classList.contains('state-thinking') && !body.classList.contains('state-speaking')) {
-                    clearTimeout(speechPauseTimer);
-                    const finalQuery = accumulatedTranscript.trim();
-                    accumulatedTranscript = "";
-                    handleUserSpeech(finalQuery);
-                    return;
-                }
-
-                if (isListening && !body.classList.contains('state-thinking') && !body.classList.contains('state-speaking')) {
-                    setTimeout(() => {
-                        if (isListening && !body.classList.contains('state-thinking') && !body.classList.contains('state-speaking')) {
-                            try { recognition.start(); } catch (err) {}
-                        }
-                    }, 350);
+                if (!isBusy) {
+                    isListening = false;
+                    micBtn.classList.remove('active');
+                    setRobotState('idle');
                 }
             };
         }
 
-        function toggleVoiceSession() {
-            keepScreenAwakeAndUnlock();
-
-            if (!recognition) {
-                alert("Trình duyệt không hỗ trợ nhận diện giọng nói. Vui lòng dùng Chrome hoặc Safari.");
-                return;
-            }
-
-            if (!isListening) {
-                startListeningSession();
-            } else {
-                stopListeningSession();
+        function startMicClean() {
+            if (!recognition || isBusy) return;
+            try {
+                recognition.start();
+            } catch (e) {
+                try {
+                    recognition.stop();
+                    setTimeout(() => { recognition.start(); }, 200);
+                } catch (err) {}
             }
         }
 
-        // 6. GỬI CÂU HỎI & PHÁT ÂM THANH TRẢ LỜI (CÓ CHỐT CHẶN CHỐNG TỰ NGHĨ KHI IM LẶNG)
-        async function handleUserSpeech(query) {
-            clearTimeout(silenceStandbyTimer);
-            clearTimeout(speechPauseTimer);
+        function toggleVoiceSession() {
+            requestWakeLock();
 
-            if (!query || typeof query !== 'string' || query.trim().length < 2) {
-                setRobotState('idle');
-                if (isListening) resetSilenceStandby();
+            if (body.classList.contains('state-speaking')) {
+                serverAudio.pause();
+                serverAudio.currentTime = 0;
+                isBusy = false;
+                startMicClean();
                 return;
             }
 
-            const cleanText = query.trim();
+            if (!recognition) return;
+
+            if (!isListening) {
+                serverAudio.load();
+                startMicClean();
+            } else {
+                isListening = false;
+                micBtn.classList.remove('active');
+                try { recognition.stop(); } catch (e) {}
+                setRobotState('idle');
+            }
+        }
+
+        // 3. XỬ LÝ CÂU HỎI VÀ PHÁT ÂM THANH TRẢ LỜI
+        async function handleUserSpeech(query) {
+            if (!query || query.trim().length < 2) {
+                isBusy = false;
+                isListening = false;
+                micBtn.classList.remove('active');
+                setRobotState('idle');
+                return;
+            }
+
+            isBusy = true;
             setRobotState('thinking');
 
             try {
@@ -360,7 +288,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
-                        message: cleanText, 
+                        message: query.trim(), 
                         model: currentModel,
                         voice: voiceSelect.value 
                     })
@@ -369,48 +297,44 @@
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const data = await response.json();
-                const audioBase64 = data.audio || data.audio_base64 || "";
 
-                if (audioBase64 && typeof audioBase64 === 'string' && audioBase64.length > 200) {
+                if (data.audio) {
                     setRobotState('speaking');
-                    serverAudio.src = "data:audio/mp3;base64," + audioBase64;
+                    serverAudio.src = "data:audio/mp3;base64," + data.audio;
 
                     serverAudio.onended = () => {
+                        isBusy = false;
                         setRobotState('idle');
-                        if (isListening) {
-                            setTimeout(() => {
-                                if (isListening) {
-                                    accumulatedTranscript = "";
-                                    try { 
-                                        recognition.start(); 
-                                        setRobotState('listening');
-                                        resetSilenceStandby();
-                                    } catch (e) {}
-                                }
-                            }, 600);
-                        }
+                        setTimeout(() => {
+                            startMicClean();
+                        }, 600);
                     };
 
                     serverAudio.onerror = () => {
+                        isBusy = false;
+                        isListening = false;
+                        micBtn.classList.remove('active');
                         setRobotState('idle');
-                        if (isListening) resetSilenceStandby();
                     };
 
-                    const playPromise = serverAudio.play();
-                    if (playPromise !== undefined) {
-                        playPromise.catch(() => {
-                            setTimeout(() => { serverAudio.play().catch(() => {}); }, 150);
-                            setRobotState('speaking');
-                        });
-                    }
+                    serverAudio.play().catch(() => {
+                        isBusy = false;
+                        isListening = false;
+                        micBtn.classList.remove('active');
+                        setRobotState('idle');
+                    });
                 } else {
+                    isBusy = false;
+                    isListening = false;
+                    micBtn.classList.remove('active');
                     setRobotState('idle');
-                    if (isListening) resetSilenceStandby();
                 }
 
             } catch (err) {
+                isBusy = false;
+                isListening = false;
+                micBtn.classList.remove('active');
                 setRobotState('idle');
-                if (isListening) resetSilenceStandby();
             }
         }
     </script>
