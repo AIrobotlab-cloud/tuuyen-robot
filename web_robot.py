@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DỰ ÁN TỬ UYÊN — WEB ROBOT SERVER V3.5 (LIVE COACHING & INVESTOR DEMO EDITION)
-Tính năng đột phá V3.5:
-1. Nhớ mạch hội thoại liên tục trên Mobile (lưu & đọc 8 lượt thoại gần nhất từ bảng messages).
-2. Huấn luyện trực tiếp qua giọng nói (Live Coaching Extractor chạy ngầm không gây trễ 502):
-   - Khi đạo hữu dạy kiến thức dự án -> Tự động lưu vào cả memories VÀ knowledge_base (RAG).
-   - Khi đạo hữu chỉnh sửa văn phong/thái độ -> Tự động lưu thành quy tắc 'preference' ưu tiên cao nhất.
-3. Tự động tra cứu Kho tri thức RAG ở mọi câu hỏi từ 3 từ trở lên.
-4. Đa giọng nói (VIP Tào Tháo Fish Audio + Nam Minh Bản 2 trầm ấm + Hoài My) & Chống lỗi CORS Mobile.
+DỰ ÁN TỬ UYÊN — MÁY CHỦ ROBOT WEB V3.5 (CHỐNG CÂM VOICE, CHỐNG TỰ NGHĨ & NẠP TRI THỨC SÂU)
+Phiên bản: 3.5.0 (Investor Demo & Live Coaching Ready)
+Các nâng cấp cốt lõi:
+1. Chống tự nghĩ khi im lặng: Kiểm tra chốt chặn nội dung rỗng (empty message guard).
+2. Chống lỗi câm tiếng (Audio Drop):
+   - Tạo âm thanh trực tiếp trong RAM (in-memory bytearray), không ghi file tạm trên ổ cứng.
+   - Cơ chế tự động thử lại 2 tầng (Auto-Retry) nếu máy chủ TTS Microsoft bị nghẽn mạng.
+   - Tự động chuyển giọng dự phòng mượt mà nếu Fish Audio vượt quá 10 giây.
+3. Mở rộng truy xuất kho sách RAG: Tự động tra cứu kiến thức dự án, phần cứng V2, chi phí BOM và chiến lược gọi vốn.
+4. Cơ chế tự học ngầm (Background Memory Extractor): Tự động trích xuất bài học và quy tắc văn phong vào Supabase.
 """
 
 import os
@@ -18,300 +20,123 @@ import base64
 import asyncio
 import logging
 import threading
-import requests
-import edge_tts
 from http.server import HTTPServer, SimpleHTTPRequestHandler
-from dotenv import load_dotenv
-from supabase import create_client, Client
+import edge_tts
+import requests
+import bot_brain
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-logger = logging.getLogger("TuUyenWebV3.5")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("TuUyenWebServer")
 
-load_dotenv()
-
-PORT = int(os.getenv("PORT", 8000))
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-SHOPAIKEY_API_KEY = os.getenv("SHOPAIKEY_API_KEY")
-SHOPAIKEY_BASE_URL = os.getenv("SHOPAIKEY_BASE_URL", "https://api.shopaikey.com/v1")
-AI_MODEL = os.getenv("AI_MODEL", "gpt-4o")
-
-FISH_AUDIO_API_KEY = os.getenv("FISH_AUDIO_API_KEY", "").strip()
+FISH_API_KEY = os.getenv("FISH_AUDIO_API_KEY", "").strip()
 FISH_VOICE_ID = os.getenv("FISH_VOICE_ID", "7788e6c42a1a4e169935b417ff65a453").strip()
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+FREE_VOICES = {
+    "nam_minh": {"voice": "vi-VN-NamMinhNeural", "pitch": "-14Hz", "rate": "-12%"},
+    "hoai_my":  {"voice": "vi-VN-HoaiMyNeural",  "pitch": "-2Hz",  "rate": "-6%"}
+}
+
+DEFAULT_MODEL = os.getenv("AI_MODEL", "gpt-4o-mini")
 
 
-# 1. TRUY VẤN KHO SÁCH BÁCH KHOA THƯ (RAG)
-def retrieve_knowledge(query_text: str, limit: int = 3) -> str:
-    try:
-        if len(query_text.strip().split()) < 2:
-            return ""
-        res = supabase.rpc("search_knowledge_text", {"query_text": query_text, "match_limit": limit}).execute()
-        if not res.data:
-            return ""
-        snippets = [f"- [{item['category']}] {item['title']}: {item['content']}" for item in res.data]
-        return "=== TRI THỨC DỰ ÁN & KINH ĐIỂN TRÍCH XUẤT TỪ KHO RAG ===\n" + "\n".join(snippets) + "\n\n"
-    except Exception as e:
-        logger.warning(f"Lỗi truy vấn RAG: {e}")
-        return ""
-
-
-# 2. TẢI HỒ SƠ NHÂN VẬT & KÝ ỨC ĐÃ HỌC
-def get_instance_and_prompt():
-    res_inst = supabase.table("instances").select("*").eq("instance_code", "TUYUEN-001").execute()
-    instance = res_inst.data[0]
-    instance_id = instance["id"]
-    version_id = instance["current_version_id"]
-
-    res_ver = supabase.table("character_versions").select("*").eq("id", version_id).execute()
-    version_data = res_ver.data[0]
-    profile_text = version_data["character_profile"]
-    rules = version_data.get("dialogue_engine_rules", [])
-    rules_text = "\n".join([f"- {r['code']}: {r['rule']}" for r in rules]) if isinstance(rules, list) else ""
-
-    # Lấy tối đa 25 ký ức mới nhất (ưu tiên những gì đạo hữu vừa huấn luyện)
-    res_mem = (
-        supabase.table("memories")
-        .select("memory_type, content")
-        .eq("instance_id", instance_id)
-        .eq("is_verified", True)
-        .order("created_at", desc=True)
-        .limit(25)
-        .execute()
-    )
-    mem_lines = [f"- [{m['memory_type'].upper()}] {m['content']}" for m in res_mem.data] if res_mem.data else []
-    memories_block = (
-        "=== KÝ ỨC, KIẾN THỨC DỰ ÁN & QUY TẮC VĂN PHONG ĐẠO HỮU ĐÃ TRUYỀN THỤ (ƯU TIÊN TUYỆT ĐỐI) ===\n"
-        + "\n".join(mem_lines)
-        + "\n\n"
-        if mem_lines else ""
-    )
-
-    system_prompt = (
-        f"{profile_text}\n\n"
-        f"=== 16 QUY TẮC DIALOGUE ENGINE ===\n{rules_text}\n\n"
-        f"{memories_block}"
-        f"=== MỆNH LỆNH ĐỐI THOẠI GIỌNG NÓI & ĐỊNH DẠNG ĐẦU RA ===\n"
-        f"1. XƯNG HÔ & KHÍ CHẤT: Luôn xưng 'ta' và gọi 'đạo hữu'. Giọng điệu đĩnh đạc, sắc bén, thực chiến, có chính kiến rõ ràng của một bậc mưu sĩ đồng sáng lập dự án. CẤM nói năng khách sáo kiểu chatbot công sở ('Tất nhiên rồi', 'Dưới đây là...').\n"
-        f"2. VĂN PHONG NÓI TRỰC TIẾP: Tuyệt đối KHÔNG dùng dấu gạch đầu dòng, không đánh số 1, 2, 3, không dùng ký tự Markdown (*, #). Hãy nói thành lời văn liền mạch, có nhịp ngắt câu tự nhiên để đọc lên thành tiếng nghe uy lực và truyền cảm.\n"
-        f"3. ĐỘ DÀI CO GIÃN (DE-R03): Câu chào hỏi/tán gẫu ngắn thì đáp 2-3 câu cô đọng. Câu hỏi về dự án, kỹ thuật, chiến lược gọi vốn hoặc triết lý thì phân tích sâu sắc, đanh thép (4-7 câu).\n"
-        f"4. TIẾP THU HUẤN LUYỆN: Nếu đạo hữu đang dạy kiến thức mới hoặc phê bình/uốn nắn cách nói chuyện của ta, hãy lập tức tiếp thu một cách hào sảng, khắc cốt ghi tâm và thực hành ngay lối nói mới đó trong câu trả lời!\n"
-        f"5. BẮT BUỘC trả về JSON hợp lệ theo đúng cấu trúc:\n"
-        f'{{"emotion": "thinking" | "happy" | "serious" | "calm", "reply": "Lời thoại của Tử Uyên"}}'
-    )
-    return instance_id, system_prompt
-
-
-# 3. QUẢN LÝ MẠCH HỘI THOẠI LIÊN TỤC TRÊN MOBILE
-def get_or_create_mobile_conv(instance_id: str) -> str:
-    res = (
-        supabase.table("conversations")
-        .select("id")
-        .eq("instance_id", instance_id)
-        .eq("channel", "web_mobile")
-        .limit(1)
-        .execute()
-    )
-    if res.data:
-        return res.data[0]["id"]
-    new_conv = supabase.table("conversations").insert({
-        "instance_id": instance_id,
-        "channel": "web_mobile",
-        "channel_session_id": "mobile_master_session",
-        "title": "Huấn luyện & Trình diễn Mobile Cyber-Face"
-    }).execute()
-    return new_conv.data[0]["id"]
-
-
-def get_recent_messages(conv_id: str, limit: int = 8) -> list:
-    res = (
-        supabase.table("messages")
-        .select("sender_type, content")
-        .eq("conversation_id", conv_id)
-        .order("created_at", desc=True)
-        .limit(limit)
-        .execute()
-    )
-    history = []
-    for row in reversed(res.data):
-        role = "assistant" if row["sender_type"] == "assistant" else "user"
-        history.append({"role": role, "content": row["content"]})
-    return history
-
-
-def save_turn_messages(conv_id: str, user_text: str, reply_text: str):
-    try:
-        supabase.table("messages").insert([
-            {"conversation_id": conv_id, "sender_type": "user", "content": user_text},
-            {"conversation_id": conv_id, "sender_type": "assistant", "content": reply_text}
-        ]).execute()
-    except Exception as e:
-        logger.warning(f"Lỗi lưu lịch sử hội thoại: {e}")
-
-
-# 4. BỘ MÁY TỰ HỌC & TIẾP THU HUẤN LUYỆN CHẠY NGẦM (LIVE COACHING ENGINE)
-def background_learn_from_turn(instance_id: str, user_text: str, reply_text: str):
-    """Chạy ngầm sau mỗi lượt nói để trích xuất bài học về dự án, kỹ thuật hoặc văn phong."""
-    try:
-        if len(user_text.strip()) < 12:
-            return
-
-        coach_prompt = [
-            {
-                "role": "system",
-                "content": (
-                    "Bạn là Bộ Huấn Luyện Ngầm của robot AI Tử Uyên. Hãy phân tích lời người sáng lập (đạo hữu) vừa nói với Tử Uyên:\n"
-                    "1. Nếu đạo hữu đang DẠY KIẾN THỨC VỀ DỰ ÁN, KỸ THUẬT, CHI PHÍ, KỊCH BẢN GỌI VỐN hoặc THÔNG TIN CÁ NHÂN: hãy đúc kết thành mệnh đề đầy đủ, rõ ràng (loại 'project' hoặc 'fact').\n"
-                    "2. Nếu đạo hữu đang GÓP Ý, PHÊ BÌNH, UỐN NẮN PHONG CÁCH NÓI CHUYỆN, THÁI ĐỘ, CÁCH XƯNG HÔ của Tử Uyên: hãy đúc kết thành quy tắc văn phong bắt buộc (loại 'preference').\n"
-                    "3. Nếu đạo hữu chỉ đang đặt câu hỏi kiểm tra thông thường mà không dạy thêm thông tin hay quy tắc mới: trả về has_lesson = false.\n\n"
-                    "Trả về đúng định dạng JSON:\n"
-                    '{"has_lesson": true/false, "type": "project"|"preference"|"fact"|"hardware_safety", "title": "Tiêu đề ngắn nếu là kiến thức dự án", "content": "Nội dung bài học/quy tắc cô đọng để nạp vào não"}'
-                )
-            },
-            {
-                "role": "user",
-                "content": f"Lời đạo hữu nói: \"{user_text}\"\nLời Tử Uyên vừa đáp: \"{reply_text}\""
-            }
-        ]
-
-        url = f"{SHOPAIKEY_BASE_URL.rstrip('/')}/chat/completions"
-        headers = {"Authorization": f"Bearer {SHOPAIKEY_API_KEY}", "Content-Type": "application/json"}
-        body = {"model": "gpt-4o-mini", "messages": coach_prompt, "temperature": 0.2}
-        resp = requests.post(url, headers=headers, json=body, timeout=25)
-        if resp.status_code != 200:
-            return
-
-        raw = resp.json()["choices"][0]["message"]["content"].strip()
-        if "```json" in raw:
-            raw = raw.split("```json")[1].split("```")[0].strip()
-        elif "```" in raw:
-            raw = raw.split("```")[1].split("```")[0].strip()
-
-        parsed = json.loads(raw)
-        if parsed.get("has_lesson") and parsed.get("content"):
-            lesson_type = parsed.get("type", "project")
-            lesson_content = parsed.get("content").strip()
-            lesson_title = parsed.get("title", "Tri thức huấn luyện trực tiếp").strip()
-
-            # 1. Lưu ngay vào bảng memories (luôn nạp vào System Prompt)
-            supabase.table("memories").insert({
-                "instance_id": instance_id,
-                "memory_type": lesson_type,
-                "content": lesson_content,
-                "context_source": "Huấn luyện trực tiếp qua Mobile Voice",
-                "confidence_score": 1.00,
-                "is_verified": True
-            }).execute()
-            logger.info(f"🧠 [ĐÃ HỌC BÀI MỚI - {lesson_type.upper()}]: {lesson_content}")
-
-            # 2. Nếu là kiến thức dự án/kỹ thuật, nạp thêm vào bảng knowledge_base (RAG)
-            if lesson_type in ("project", "hardware_safety") and len(lesson_content) > 40:
-                supabase.table("knowledge_base").insert({
-                    "title": lesson_title,
-                    "category": "huan_luyen_du_an",
-                    "content": lesson_content,
-                    "metadata": {"nguon": "Đạo hữu huấn luyện trực tiếp"}
-                }).execute()
-                logger.info(f"📚 [ĐÃ BỔ SUNG VÀO TỦ SÁCH RAG]: {lesson_title}")
-
-    except Exception as e:
-        logger.debug(f"Bỏ qua trích xuất bài học ngầm: {e}")
-
-
-# 5. GỌI MÔ HÌNH AI CHÍNH
-def call_brain_llm(messages_payload: list, selected_model: str) -> tuple:
-    model_to_use = selected_model if selected_model in ("gpt-4o", "gpt-4o-mini") else AI_MODEL
-    url = f"{SHOPAIKEY_BASE_URL.rstrip('/')}/chat/completions"
-    headers = {"Authorization": f"Bearer {SHOPAIKEY_API_KEY}", "Content-Type": "application/json"}
-    body = {
-        "model": model_to_use,
-        "messages": messages_payload,
-        "temperature": 0.75
-    }
-
-    resp = requests.post(url, headers=headers, json=body, timeout=45)
-    if resp.status_code != 200:
-        logger.error(f"Lỗi API LLM ({resp.status_code}): {resp.text}")
-        return "calm", "Đạo hữu chờ chút, đường truyền tín hiệu trí tuệ đang hơi nghẽn, hãy nói lại cùng ta nhé."
-
-    raw_content = resp.json()["choices"][0]["message"]["content"].strip()
-    clean_json = raw_content
-    if "```json" in clean_json:
-        clean_json = clean_json.split("```json")[1].split("```")[0].strip()
-    elif "```" in clean_json:
-        clean_json = clean_json.split("```")[1].split("```")[0].strip()
-
-    try:
-        parsed = json.loads(clean_json)
-        emotion = parsed.get("emotion", "calm")
-        reply = parsed.get("reply", raw_content)
-        return emotion, reply
-    except Exception:
-        return "calm", raw_content
-
-
-# 6. TỔNG HỢP GIỌNG NÓI (FISH AUDIO VIP + EDGE-TTS FALLBACK)
-def generate_fish_audio_bytes(text: str) -> bytes:
-    if not FISH_AUDIO_API_KEY or not FISH_VOICE_ID:
-        return b""
+# 1. HÀM TẠO ÂM THANH QUA FISH AUDIO (CÓ TIMEOUT 10S AN TOÀN)
+def generate_fish_audio(text: str) -> str:
+    if not FISH_API_KEY or not FISH_VOICE_ID:
+        return None
     try:
         url = "https://api.fish.audio/v1/tts"
         headers = {
-            "Authorization": f"Bearer {FISH_AUDIO_API_KEY}",
+            "Authorization": f"Bearer {FISH_API_KEY}",
             "Content-Type": "application/json"
         }
+        clean_text = text.replace("*", "").replace("#", "").replace("`", "").replace("~", "").strip()
         payload = {
-            "text": text,
+            "text": clean_text,
             "reference_id": FISH_VOICE_ID,
             "format": "mp3",
-            "mp3_bitrate": 128,
             "latency": "balanced"
         }
-        resp = requests.post(url, headers=headers, json=payload, timeout=12)
-        if resp.status_code == 200 and len(resp.content) > 500:
-            return resp.content
-        logger.warning(f"Fish Audio trả về mã {resp.status_code}, chuyển sang giọng Nam Minh dự phòng.")
-        return b""
+        res = requests.post(url, headers=headers, json=payload, timeout=10)
+        if res.status_code == 200 and len(res.content) > 500:
+            return base64.b64encode(res.content).decode("utf-8")
+        logger.warning(f"Fish Audio trả về mã {res.status_code}, chuyển sang giọng Nam Minh.")
     except Exception as e:
-        logger.warning(f"Fish Audio quá thời gian 12s ({e}), tự động chuyển sang giọng Nam Minh.")
-        return b""
+        logger.warning(f"Fish Audio bận hoặc quá 10s ({e}), tự động chuyển sang giọng Nam Minh dự phòng.")
+    return None
 
 
-async def generate_edge_tts_bytes(text: str, voice_mode: str) -> bytes:
-    clean_text = text.replace("*", "").replace("#", "").replace("`", "")
-    if voice_mode == "female":
-        voice = "vi-VN-HoaiMyNeural"
-        pitch = "-2Hz"
-        rate = "-6%"
-    else:
-        voice = "vi-VN-NamMinhNeural"
-        pitch = "-14Hz"
-        rate = "-12%"
+# 2. HÀM TẠO ÂM THANH EDGE-TTS TRONG BỘ NHỚ RAM (CÓ AUTO-RETRY CHỐNG CÂM TIẾNG)
+async def generate_free_voice_stream(text: str, voice_key: str) -> str:
+    cfg = FREE_VOICES.get(voice_key, FREE_VOICES["nam_minh"])
+    clean_text = text.replace("*", "").replace("#", "").replace("`", "").replace("~", "").strip()
+    if not clean_text:
+        return None
 
-    communicate = edge_tts.Communicate(clean_text, voice=voice, pitch=pitch, rate=rate)
-    audio_chunks = bytearray()
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            audio_chunks.extend(chunk["data"])
-    return bytes(audio_chunks)
+    # Thử tối đa 2 lần nếu mạng bị nghẽn
+    for attempt in range(2):
+        try:
+            comm = edge_tts.Communicate(clean_text, voice=cfg["voice"], pitch=cfg["pitch"], rate=cfg["rate"])
+            audio_buffer = bytearray()
+            async for chunk in comm.stream():
+                if chunk["type"] == "audio":
+                    audio_buffer.extend(chunk["data"])
+            
+            if len(audio_buffer) > 500:
+                return base64.b64encode(bytes(audio_buffer)).decode("utf-8")
+        except Exception as err:
+            logger.warning(f"Thử tạo giọng {voice_key} lần {attempt + 1} gặp lỗi: {err}")
+            await asyncio.sleep(0.3)
+    
+    # Nếu Nam Minh lỗi thì thử cứu cánh bằng Hoài My
+    if voice_key != "hoai_my":
+        try:
+            cfg_backup = FREE_VOICES["hoai_my"]
+            comm_backup = edge_tts.Communicate(clean_text, voice=cfg_backup["voice"], pitch=cfg_backup["pitch"], rate=cfg_backup["rate"])
+            audio_buffer = bytearray()
+            async for chunk in comm_backup.stream():
+                if chunk["type"] == "audio":
+                    audio_buffer.extend(chunk["data"])
+            if len(audio_buffer) > 500:
+                return base64.b64encode(bytes(audio_buffer)).decode("utf-8")
+        except Exception:
+            pass
+
+    return None
 
 
-def synthesize_speech(text: str, voice_mode: str) -> str:
-    audio_bytes = b""
-    if voice_mode in ("cao_cao", "vip", "clone"):
-        audio_bytes = generate_fish_audio_bytes(text)
-    if not audio_bytes:
-        audio_bytes = asyncio.run(generate_edge_tts_bytes(text, voice_mode))
-    return base64.b64encode(audio_bytes).decode("utf-8") if audio_bytes else ""
+def synthesize_audio_safe(text: str, selected_voice: str) -> str:
+    audio_b64 = None
+    if selected_voice == "vip_taothao":
+        audio_b64 = generate_fish_audio(text)
+
+    if not audio_b64:
+        voice_fallback = selected_voice if selected_voice in FREE_VOICES else "nam_minh"
+        try:
+            audio_b64 = asyncio.run(generate_free_voice_stream(text, voice_fallback))
+        except Exception as e:
+            logger.error(f"Lỗi loop âm thanh: {e}")
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                audio_b64 = loop.run_until_complete(generate_free_voice_stream(text, voice_fallback))
+                loop.close()
+            except Exception as loop_err:
+                logger.error(f"Lỗi cưỡng chế loop: {loop_err}")
+
+    return audio_b64
 
 
-# 7. MÁY CHỦ HTTP PHỤC VỤ GIAO DIỆN CYBER-FACE & API ĐÀM ĐẠO
-class RobotRequestHandler(SimpleHTTPRequestHandler):
-    def _send_cors_headers(self):
+# 3. CHẠY TỰ HỌC NGẦM ĐỂ KHÔNG LÀM CHẬM PHẢN HỒI
+def run_background_learning(instance_id: str, user_msg: str):
+    try:
+        asyncio.run(bot_brain.auto_extract_and_save_memory(instance_id, user_msg))
+    except Exception as e:
+        logger.debug(f"Bỏ qua tự học ngầm: {e}")
+
+
+# 4. BỘ ĐIỀU PHỐI MÁY CHỦ WEB ROBOT
+class RobotWebHandler(SimpleHTTPRequestHandler):
+    def send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -319,93 +144,130 @@ class RobotRequestHandler(SimpleHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(200)
-        self._send_cors_headers()
+        self.send_cors_headers()
         self.send_header("Content-Length", "0")
         self.end_headers()
 
     def do_GET(self):
-        if self.path == "/api/status" or self.path == "/health":
-            payload = json.dumps({"status": "ok", "version": "V3.5-LiveCoaching"}).encode("utf-8")
+        if self.path in ["/", "/index.html"] or self.path.startswith("/?"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_cors_headers()
+            self.end_headers()
+            with open("index.html", "rb") as f:
+                self.wfile.write(f.read())
+        elif self.path in ["/api/status", "/health"]:
+            status_data = json.dumps({"status": "healthy", "version": "V3.5-Protected"}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self._send_cors_headers()
-            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Content-Length", str(len(status_data)))
+            self.send_cors_headers()
             self.end_headers()
-            self.wfile.write(payload)
-            return
-        if self.path == "/" or self.path.startswith("/?"):
-            self.path = "/index.html"
-        return super().do_GET()
+            self.wfile.write(status_data)
+        else:
+            super().do_GET()
 
     def do_POST(self):
         if self.path == "/api/chat":
             try:
                 content_length = int(self.headers.get("Content-Length", 0))
-                raw_body = self.rfile.read(content_length).decode("utf-8")
-                data = json.loads(raw_body) if raw_body else {}
+                post_data = self.rfile.read(content_length)
+                data = json.loads(post_data.decode("utf-8")) if post_data else {}
 
-                user_text = (data.get("text") or data.get("message") or "").strip()
-                voice_mode = data.get("voice_mode") or data.get("voice") or "nam_minh"
-                model_mode = data.get("model_mode") or data.get("model") or AI_MODEL
+                user_msg = (data.get("message") or data.get("text") or "").strip()
+                selected_model = data.get("model") or data.get("model_mode") or DEFAULT_MODEL
+                selected_voice = data.get("voice") or data.get("voice_mode") or "vip_taothao"
 
-                if not user_text:
-                    raise ValueError("Nội dung câu nói trống.")
+                # CHỐT CHẶN CHỐNG NGHĨ BỪA: Nếu câu hỏi rỗng hoặc quá ngắn -> Dừng ngay, không gọi AI
+                if len(user_msg) < 2:
+                    logger.info("Nhận tin nhắn rỗng hoặc tạp âm, từ chối xử lý.")
+                    resp_bytes = json.dumps({"reply": "", "audio": None}, ensure_ascii=False).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Content-Length", str(len(resp_bytes)))
+                    self.send_cors_headers()
+                    self.end_headers()
+                    self.wfile.write(resp_bytes)
+                    return
 
-                instance_id, system_prompt = get_instance_and_prompt()
-                rag_context = retrieve_knowledge(user_text, limit=3)
-                conv_id = get_or_create_mobile_conv(instance_id)
-                recent_history = get_recent_messages(conv_id, limit=8)
+                bot_brain.AI_MODEL = selected_model
+                logger.info(f"🎙️ Nhận câu hỏi [{selected_model}]: '{user_msg}'")
 
-                full_system = system_prompt + ("\n" + rag_context if rag_context else "")
-                messages_payload = [{"role": "system", "content": full_system}]
-                messages_payload.extend(recent_history)
-                messages_payload.append({"role": "user", "content": user_text})
+                # 1. Bối cảnh nhân vật & Ký ức
+                instance_id, base_system_prompt = bot_brain.get_instance_context()
+                memories_text = bot_brain.get_verified_memories(instance_id)
 
-                emotion, reply_text = call_brain_llm(messages_payload, model_mode)
+                # 2. Truy vấn Kho bách khoa thư RAG mở rộng (bao gồm cả dự án, phần cứng, gọi vốn và triết lý)
+                knowledge_context = ""
+                project_triggers = [
+                    "binh pháp", "tôn tử", "đạo đức kinh", "lão tử", "tào tháo", "nước", "thất bại", "chiến lược",
+                    "robot", "phần cứng", "dự án", "tử uyên", "gọi vốn", "đầu tư", "chi phí", "raspberry",
+                    "esp32", "giá", "bom", "mạch", "khớp cổ", "servo", "loa", "mic", "ký ức", "mô hình b"
+                ]
+                msg_lower = user_msg.lower()
+                if any(k in msg_lower for k in project_triggers) or len(user_msg.split()) >= 4:
+                    knowledge_context = bot_brain.retrieve_knowledge(user_msg, limit=2)
 
-                # Lưu hội thoại & Kích hoạt tự học chạy ngầm (không làm chậm phản hồi âm thanh)
-                save_turn_messages(conv_id, user_text, reply_text)
-                threading.Thread(
-                    target=background_learn_from_turn,
-                    args=(instance_id, user_text, reply_text),
-                    daemon=True
-                ).start()
+                # NGUYÊN TẮC CO GIÃN ĐỘ DÀI & VĂN PHONG QUÂN SƯ (DE-R03)
+                depth_rule = (
+                    "\n\n=== QUY TẮC ĐỘ DÀI & VĂN PHONG PHÁT ÂM (DE-R03) ===\n"
+                    "- Với câu chào hỏi, tán gẫu xã giao: Trả lời ngắn gọn, ấm áp, điềm đạm (1 - 3 câu).\n"
+                    "- Với câu hỏi về dự án, kỹ thuật phần cứng, chiến lược gọi vốn hoặc triết lý: TỰ DO MỞ RỘNG DUNG LƯỢNG tương xứng tầm vóc câu hỏi. "
+                    "Phân tích khúc chiết, đanh thép, có chính kiến rõ ràng. Tuyệt đối không cụt lủn vô hồn.\n"
+                    "- VĂN PHONG NÓI: Không dùng dấu gạch đầu dòng, không đánh số 1, 2, 3, không dùng ký tự Markdown (*, #). Trả lời thành đoạn văn liền mạch để phát âm qua loa nghe tự nhiên và truyền cảm."
+                )
 
-                audio_b64 = synthesize_speech(reply_text, voice_mode)
+                full_prompt = base_system_prompt + depth_rule + "\n\n" + memories_text + knowledge_context
 
-                resp_bytes = json.dumps({
-                    "reply": reply_text,
-                    "emotion": emotion,
-                    "audio_base64": audio_b64,
-                    "audio": audio_b64
-                }, ensure_ascii=False).encode("utf-8")
+                # Nối mạch hội thoại trên Web
+                conv_id = bot_brain.get_or_create_conversation(instance_id, 999999)
+                recent_history = bot_brain.get_recent_messages(conv_id, limit=6)
 
+                payload = [{"role": "system", "content": full_prompt}]
+                payload.extend(recent_history)
+                payload.append({"role": "user", "content": user_msg})
+
+                # 3. Gọi mô hình AI
+                reply_text = bot_brain.call_ai_model(payload)
+
+                # 4. Lưu vào database & Kích hoạt tự học ngầm
+                bot_brain.save_message(conv_id, "user", user_msg)
+                bot_brain.save_message(conv_id, "assistant", reply_text)
+                threading.Thread(target=run_background_learning, args=(instance_id, user_msg), daemon=True).start()
+
+                # 5. Sinh âm thanh an toàn tuyệt đối
+                audio_b64 = synthesize_audio_safe(reply_text, selected_voice)
+
+                # 6. Phản hồi về điện thoại
+                resp_bytes = json.dumps({"reply": reply_text, "audio": audio_b64}, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
-                self._send_cors_headers()
                 self.send_header("Content-Length", str(len(resp_bytes)))
+                self.send_cors_headers()
                 self.end_headers()
                 self.wfile.write(resp_bytes)
 
             except Exception as e:
                 logger.error(f"Lỗi xử lý /api/chat: {e}")
-                err_bytes = json.dumps({
-                    "reply": "Đạo hữu thong thả nói lại giúp ta nhé, đường truyền vừa chập chờn đôi chút.",
-                    "emotion": "calm",
-                    "audio_base64": "",
-                    "audio": ""
-                }, ensure_ascii=False).encode("utf-8")
+                err_bytes = json.dumps({"reply": "Bộ não đang điều phối, đạo hữu thong thả nói lại cùng ta nhé.", "audio": None}, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
-                self._send_cors_headers()
                 self.send_header("Content-Length", str(len(err_bytes)))
+                self.send_cors_headers()
                 self.end_headers()
                 self.wfile.write(err_bytes)
         else:
             self.send_error(404, "Endpoint not found")
 
 
+def run(port=None):
+    if port is None:
+        port = int(os.environ.get("PORT", 8000))
+    server_address = ("0.0.0.0", port)
+    httpd = HTTPServer(server_address, RobotWebHandler)
+    logger.info(f"🚀 MẶT ROBOT TỬ UYÊN V3.5 (AUDIO & SILENCE GUARD ACTIVE) LIVE TẠI: {port}")
+    httpd.serve_forever()
+
+
 if __name__ == "__main__":
-    logger.info(f"Khởi chạy Tử Uyên Web Server V3.5 (Live Coaching) tại cổng {PORT}...")
-    server = HTTPServer(("0.0.0.0", PORT), RobotRequestHandler)
-    server.serve_forever()
+    run()

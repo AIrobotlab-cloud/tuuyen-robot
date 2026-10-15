@@ -65,7 +65,6 @@
         .bar:nth-child(5) { animation-delay: 0.15s; }
         @keyframes audioWave { 0% { height: 6px; } 100% { height: 32px; background: #7dd3fc; } }
 
-        /* KHÔNG CÒN BẤT KỲ HỘP CHỮ NÀO TRÊN MÀN HÌNH */
         .controls { width: 100%; padding: 24px; display: flex; flex-direction: column; align-items: center; z-index: 20; }
         .mic-btn {
             width: 76px; height: 76px; border-radius: 50%;
@@ -117,7 +116,7 @@
         </button>
     </div>
 
-    <audio id="server-audio" style="display: none;"></audio>
+    <audio id="server-audio" style="display: none;" playsinline preload="auto"></audio>
 
     <script>
         const body = document.body;
@@ -135,6 +134,18 @@
         let isListening = false;
         let recognition = null;
         let wakeLock = null;
+        let isAudioUnlocked = false;
+        let silenceStandbyTimer = null;
+
+        // 1. MỞ KHÓA ÂM THANH TRÌNH DUYỆT (CHỐNG LỖI CÂM VOICE TRÊN MOBILE)
+        function unlockAudio() {
+            if (!isAudioUnlocked) {
+                serverAudio.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+                serverAudio.play().then(() => {
+                    isAudioUnlocked = true;
+                }).catch(() => {});
+            }
+        }
 
         async function requestWakeLock() {
             try {
@@ -179,72 +190,136 @@
         }
         triggerLookAround();
 
-        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-            const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-            recognition = new SpeechRec();
-            recognition.lang = 'vi-VN';
-            recognition.continuous = false;
-
-            recognition.onstart = () => {
-                setRobotState('listening');
-                statusText.innerText = "LẮNG NGHE";
-            };
-
-            recognition.onresult = (event) => {
-                const userQuery = event.results[0][0].transcript;
-                handleUserSpeech(userQuery);
-            };
-
-            recognition.onerror = () => {
-                setRobotState('idle');
-                statusText.innerText = "TRỰC GÁC";
-            };
-
-            recognition.onend = () => {
-                if (isListening && !body.classList.contains('state-thinking') && !body.classList.contains('state-speaking')) {
-                    setRobotState('idle');
-                    statusText.innerText = "TRỰC GÁC";
-                }
-            };
-        }
-
         function setRobotState(state) {
             body.className = '';
             body.classList.add(`state-${state}`);
             if (state === 'idle') {
                 pupilLeft.style.transform = 'translate(0, 0)';
                 pupilRight.style.transform = 'translate(0, 0)';
+                statusText.innerText = "TRỰC GÁC";
+            } else if (state === 'listening') {
+                statusText.innerText = "LẮNG NGHE";
+            } else if (state === 'thinking') {
+                statusText.innerText = "SUY NGẪM";
+            } else if (state === 'speaking') {
+                statusText.innerText = "CẤT TIẾNG";
             }
+        }
+
+        // 2. BỘ ĐẾM NGHỈ CHỜ THÔNG MINH (TỰ ĐỘNG TẮT MIC SAU 12S NẾU ĐẠO HỮU KHÔNG NÓI GÌ)
+        function resetSilenceStandby() {
+            clearTimeout(silenceStandbyTimer);
+            if (isListening) {
+                silenceStandbyTimer = setTimeout(() => {
+                    if (isListening && !body.classList.contains('state-thinking') && !body.classList.contains('state-speaking')) {
+                        console.log("Đạo hữu không nói tiếp, Tử Uyên về chế độ trực gác.");
+                        stopListeningSession();
+                    }
+                }, 12000);
+            }
+        }
+
+        function stopListeningSession() {
+            isListening = false;
+            clearTimeout(silenceStandbyTimer);
+            micBtn.classList.remove('active');
+            if (recognition) {
+                try { recognition.stop(); } catch (e) {}
+            }
+            setRobotState('idle');
+        }
+
+        function startListeningSession() {
+            if (!recognition) return;
+            try {
+                recognition.start();
+                isListening = true;
+                micBtn.classList.add('active');
+                setRobotState('listening');
+                resetSilenceStandby();
+            } catch (e) {}
+        }
+
+        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+            const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SpeechRec();
+            recognition.lang = 'vi-VN';
+            recognition.continuous = false;
+            recognition.interimResults = false;
+
+            recognition.onstart = () => {
+                setRobotState('listening');
+                resetSilenceStandby();
+            };
+
+            recognition.onresult = (event) => {
+                clearTimeout(silenceStandbyTimer);
+                if (event.results && event.results[0] && event.results[0][0]) {
+                    const userQuery = event.results[0][0].transcript;
+                    handleUserSpeech(userQuery);
+                } else {
+                    setRobotState('idle');
+                }
+            };
+
+            recognition.onerror = (e) => {
+                console.log("Lỗi nhận diện âm thanh:", e.error);
+                if (e.error === 'no-speech') {
+                    if (isListening) resetSilenceStandby();
+                    setRobotState('idle');
+                } else {
+                    stopListeningSession();
+                }
+            };
+
+            recognition.onend = () => {
+                if (isListening && !body.classList.contains('state-thinking') && !body.classList.contains('state-speaking')) {
+                    setTimeout(() => {
+                        if (isListening && !body.classList.contains('state-thinking') && !body.classList.contains('state-speaking')) {
+                            try { recognition.start(); } catch (err) {}
+                        }
+                    }, 400);
+                }
+            };
         }
 
         function toggleVoiceSession() {
             requestWakeLock();
-            serverAudio.load();
+            unlockAudio();
 
-            if (!recognition) return;
+            if (!recognition) {
+                alert("Trình duyệt không hỗ trợ nhận diện giọng nói. Vui lòng dùng Chrome hoặc Safari.");
+                return;
+            }
+
             if (!isListening) {
-                isListening = true;
-                micBtn.classList.add('active');
-                recognition.start();
+                startListeningSession();
             } else {
-                isListening = false;
-                micBtn.classList.remove('active');
-                recognition.stop();
-                setRobotState('idle');
-                statusText.innerText = "TRỰC GÁC";
+                stopListeningSession();
             }
         }
 
+        // 3. XỬ LÝ CÂU NÓI (CÓ CHỐT CHẶN CHỐNG TỰ NGHĨ KHI IM LẶNG)
         async function handleUserSpeech(query) {
+            clearTimeout(silenceStandbyTimer);
+
+            // CHỐT CHẶN: Nếu nội dung rỗng hoặc tạp âm < 2 ký tự -> TUYỆT ĐỐI KHÔNG SUY NGHĨ!
+            if (!query || typeof query !== 'string' || query.trim().length < 2) {
+                console.log("Âm thanh rỗng hoặc tạp âm, bỏ qua.");
+                setRobotState('idle');
+                if (isListening) resetSilenceStandby();
+                return;
+            }
+
+            const cleanText = query.trim();
             setRobotState('thinking');
-            statusText.innerText = "SUY NGẪM";
 
             try {
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
-                        message: query, 
+                        message: cleanText, 
                         model: currentModel,
                         voice: voiceSelect.value 
                     })
@@ -254,27 +329,50 @@
 
                 const data = await response.json();
 
-                if (data.audio) {
+                // 4. PHÁT ÂM THANH AN TOÀN TUYỆT ĐỐI
+                if (data.audio && typeof data.audio === 'string' && data.audio.length > 200) {
                     setRobotState('speaking');
-                    statusText.innerText = "CẤT TIẾNG";
                     serverAudio.src = "data:audio/mp3;base64," + data.audio;
+
                     serverAudio.onended = () => {
                         setRobotState('idle');
-                        statusText.innerText = "TRỰC GÁC";
-                        if (isListening) setTimeout(() => { if (isListening) recognition.start(); }, 800);
+                        if (isListening) {
+                            setTimeout(() => {
+                                if (isListening) {
+                                    try { 
+                                        recognition.start(); 
+                                        setRobotState('listening');
+                                        resetSilenceStandby();
+                                    } catch (e) {}
+                                }
+                            }, 600);
+                        }
                     };
-                    serverAudio.play().catch(e => {
+
+                    serverAudio.onerror = (audioErr) => {
+                        console.warn("Lỗi phát âm thanh:", audioErr);
                         setRobotState('idle');
-                        statusText.innerText = "TRỰC GÁC";
-                    });
+                        if (isListening) resetSilenceStandby();
+                    };
+
+                    const playPromise = serverAudio.play();
+                    if (playPromise !== undefined) {
+                        playPromise.catch(playErr => {
+                            console.warn("Trình duyệt chặn autoplay, thử lại:", playErr);
+                            setTimeout(() => { serverAudio.play().catch(() => {}); }, 150);
+                            setRobotState('speaking');
+                        });
+                    }
                 } else {
+                    console.warn("Không có dữ liệu âm thanh hợp lệ.");
                     setRobotState('idle');
-                    statusText.innerText = "TRỰC GÁC";
+                    if (isListening) resetSilenceStandby();
                 }
 
             } catch (err) {
+                console.error("Lỗi gọi server:", err);
                 setRobotState('idle');
-                statusText.innerText = "TRỰC GÁC";
+                if (isListening) resetSilenceStandby();
             }
         }
     </script>
