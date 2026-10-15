@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Robot Tử Uyên — Pure Cyber Face</title>
+    <title>Robot Tử Uyên — Pure Cyber Face & RPG V3.8</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-user-select: none; }
         body {
@@ -13,15 +13,26 @@
             display: flex; flex-direction: column; justify-content: space-between; align-items: center;
         }
         .top-bar {
-            width: 100%; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center;
-            font-size: 12px; letter-spacing: 1px; color: #64748b; border-bottom: 1px solid rgba(255, 255, 255, 0.05); z-index: 20;
+            width: 100%; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center;
+            font-size: 12px; letter-spacing: 0.5px; color: #64748b; border-bottom: 1px solid rgba(255, 255, 255, 0.05); z-index: 20;
+            flex-wrap: wrap; gap: 8px;
         }
+        .left-group { display: flex; align-items: center; gap: 10px; }
         .status-badge { display: flex; align-items: center; gap: 6px; color: #38bdf8; font-weight: 600; }
         .dot { width: 7px; height: 7px; background: #38bdf8; border-radius: 50%; box-shadow: 0 0 10px #38bdf8; animation: pulse 2s infinite; }
 
-        .control-group { display: flex; gap: 8px; align-items: center; }
+        /* HUY HIỆU CẤP BẬC RPG TRÊN THANH TOP-BAR */
+        .rpg-badge-btn {
+            padding: 5px 11px; background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(2, 132, 199, 0.25));
+            border: 1px solid #10b981; border-radius: 18px; color: #34d399; font-size: 11px; font-weight: 700;
+            cursor: pointer; display: flex; align-items: center; gap: 5px;
+            box-shadow: 0 0 12px rgba(16, 185, 129, 0.25); transition: all 0.2s;
+        }
+        .rpg-badge-btn:active { transform: scale(0.94); }
+
+        .control-group { display: flex; gap: 6px; align-items: center; }
         .select-btn, .mode-toggle {
-            padding: 6px 12px; background: rgba(15, 23, 42, 0.85); border: 1px solid #0284c7;
+            padding: 6px 10px; background: rgba(15, 23, 42, 0.85); border: 1px solid #0284c7;
             border-radius: 18px; color: #38bdf8; font-size: 11px; font-weight: 600; outline: none; cursor: pointer;
         }
         .mode-toggle.pro { border-color: #f59e0b; color: #fbbf24; background: rgba(245, 158, 11, 0.18); }
@@ -42,6 +53,25 @@
             position: absolute; width: 48px; height: 48px; background: rgba(255, 255, 255, 0.95);
             border-radius: 50%; top: 26px; left: 26px; filter: blur(1px); transition: all 0.4s ease-out;
         }
+
+        /* MÀU MẮT PHẦN THƯỞNG MỞ KHÓA THEO CẤP BẬC RPG */
+        body.aura-emerald.state-idle .eye {
+            background: radial-gradient(circle at 40% 40%, #34d399 0%, #059669 55%, #065f46 100%);
+            box-shadow: 0 0 55px rgba(16, 185, 129, 0.5), inset 0 0 25px rgba(255, 255, 255, 0.5);
+        }
+        body.aura-emerald.state-idle .eyebrow { background: #34d399; box-shadow: 0 0 18px rgba(52, 211, 153, 0.65); }
+
+        body.aura-gold.state-idle .eye {
+            background: radial-gradient(circle at 40% 40%, #fde047 0%, #eab308 55%, #a16207 100%);
+            box-shadow: 0 0 60px rgba(234, 179, 8, 0.55), inset 0 0 25px rgba(255, 255, 255, 0.6);
+        }
+        body.aura-gold.state-idle .eyebrow { background: #facc15; box-shadow: 0 0 18px rgba(250, 204, 21, 0.7); }
+
+        body.aura-purple.state-idle .eye {
+            background: radial-gradient(circle at 40% 40%, #c084fc 0%, #9333ea 55%, #581c87 100%);
+            box-shadow: 0 0 60px rgba(168, 85, 247, 0.55), inset 0 0 25px rgba(255, 255, 255, 0.55);
+        }
+        body.aura-purple.state-idle .eyebrow { background: #c084fc; box-shadow: 0 0 18px rgba(192, 132, 252, 0.7); }
 
         .eye.blink { height: 6px !important; margin-top: 67px; border-radius: 10px; }
         .eye.blink .pupil { opacity: 0; }
@@ -75,13 +105,79 @@
         .mic-btn:active { transform: scale(0.92); }
         .mic-btn.active { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 0 35px rgba(239, 68, 68, 0.7); animation: pulse-red 1.5s infinite; }
 
+        /* BẢNG TINH ĐỒ TU LUYỆN & NHIỆM VỤ RPG (MODAL POPUP BẬT/TẮT) */
+        .rpg-modal-overlay {
+            position: fixed; inset: 0; background: rgba(2, 6, 23, 0.86); backdrop-filter: blur(8px);
+            display: none; justify-content: center; align-items: center; z-index: 100; padding: 14px;
+        }
+        .rpg-modal-overlay.open { display: flex; }
+        .rpg-card {
+            width: 100%; max-width: 480px; max-height: 86vh; background: #0f172a;
+            border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 20px;
+            box-shadow: 0 0 40px rgba(2, 132, 199, 0.35); display: flex; flex-direction: column; overflow: hidden;
+        }
+        .rpg-header {
+            padding: 14px 18px; background: rgba(2, 6, 23, 0.6); border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .rpg-title { font-size: 14px; font-weight: 700; color: #38bdf8; }
+        .close-btn {
+            background: rgba(255, 255, 255, 0.08); border: none; color: #cbd5e1;
+            width: 28px; height: 28px; border-radius: 50%; font-size: 14px; cursor: pointer;
+        }
+        .rpg-body { padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+
+        .level-hero {
+            background: linear-gradient(135deg, rgba(2, 132, 199, 0.18), rgba(16, 185, 129, 0.12));
+            border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 14px; padding: 14px;
+        }
+        .level-name { font-size: 16px; font-weight: 800; color: #34d399; margin-bottom: 4px; }
+        .level-stage { font-size: 11px; color: #94a3b8; margin-bottom: 10px; }
+        .exp-bar-bg { width: 100%; height: 10px; background: #1e293b; border-radius: 8px; overflow: hidden; margin-bottom: 6px; }
+        .exp-bar-fill { height: 100%; background: linear-gradient(90deg, #0284c7, #10b981); width: 50%; transition: width 0.4s; }
+        .exp-meta { display: flex; justify-content: space-between; font-size: 11px; color: #cbd5e1; font-weight: 600; }
+
+        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+        .stat-box { background: rgba(2, 6, 23, 0.55); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 8px; text-align: center; }
+        .stat-val { font-size: 15px; font-weight: 800; color: #38bdf8; }
+        .stat-lbl { font-size: 10px; color: #94a3b8; margin-top: 2px; }
+
+        .aura-row { display: flex; gap: 6px; flex-wrap: wrap; }
+        .aura-btn {
+            flex: 1; min-width: 95px; padding: 6px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
+            background: #1e293b; border: 1px solid rgba(255, 255, 255, 0.1); color: #e2e8f0; cursor: pointer;
+        }
+        .aura-btn.active { border-color: #38bdf8; background: rgba(56, 189, 248, 0.2); color: #38bdf8; }
+
+        .quest-section-title { font-size: 12px; font-weight: 700; color: #fbbf24; text-transform: uppercase; letter-spacing: 0.5px; }
+        .quest-item {
+            background: rgba(2, 6, 23, 0.55); border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 6px;
+        }
+        .quest-item.done { border-color: rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.07); }
+        .quest-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+        .quest-name { font-size: 13px; font-weight: 700; color: #f8fafc; }
+        .quest-badge { font-size: 10px; padding: 2px 7px; border-radius: 10px; background: rgba(245, 158, 11, 0.2); color: #fbbf24; font-weight: 700; white-space: nowrap; }
+        .quest-item.done .quest-badge { background: rgba(16, 185, 129, 0.25); color: #34d399; }
+        .quest-desc { font-size: 11px; color: #94a3b8; line-height: 1.4; }
+        .quest-prompt { font-size: 11px; color: #7dd3fc; background: rgba(2, 132, 199, 0.12); padding: 7px 9px; border-radius: 8px; font-style: italic; }
+        .quest-actions { display: flex; gap: 8px; margin-top: 4px; }
+        .quest-act-btn {
+            flex: 1; padding: 7px 10px; border-radius: 8px; border: none; font-size: 11px; font-weight: 700; cursor: pointer;
+        }
+        .quest-act-btn.voice { background: #0284c7; color: white; }
+        .quest-act-btn.instant { background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; color: #34d399; }
+
         @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; } }
         @keyframes pulse-red { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
     </style>
 </head>
 <body class="state-idle">
     <div class="top-bar">
-        <div class="status-badge"><div class="dot"></div><span id="status-text">TRỰC GÁC</span></div>
+        <div class="left-group">
+            <div class="status-badge"><div class="dot"></div><span id="status-text">TRỰC GÁC</span></div>
+            <button class="rpg-badge-btn" id="rpg-badge-btn" onclick="openRpgModal()">⚔️ Lv.4 (Tải...)</button>
+        </div>
         <div class="control-group">
             <select class="select-btn" id="voice-select">
                 <option value="nam_minh">🎙️ Nam Minh (Trầm Binh Gia)</option>
@@ -116,6 +212,55 @@
         </button>
     </div>
 
+    <!-- BẢNG TU LUYỆN & NHIỆM VỤ RPG (ẨN MẶC ĐỊNH, CHẠM HUY HIỆU MỚI HIỆN) -->
+    <div class="rpg-modal-overlay" id="rpg-modal" onclick="if(event.target===this) closeRpgModal()">
+        <div class="rpg-card">
+            <div class="rpg-header">
+                <span class="rpg-title">🎖️ TINH ĐỒ TU LUYỆN & NHIỆM VỤ TỬ UYÊN</span>
+                <button class="close-btn" onclick="closeRpgModal()">✕</button>
+            </div>
+            <div class="rpg-body">
+                <div class="level-hero">
+                    <div class="level-name" id="rpg-level-name">⚔️ Lv.4 — Mưu Sĩ Trướng Tiền</div>
+                    <div class="level-stage" id="rpg-stage-name">Giai đoạn 2: Đồng Hành • Đặc quyền: Mở khóa Tủ sách Chiến lược</div>
+                    <div class="exp-bar-bg"><div class="exp-bar-fill" id="rpg-exp-fill" style="width: 50%;"></div></div>
+                    <div class="exp-meta">
+                        <span id="rpg-exp-text">1.650 / 3.500 EXP</span>
+                        <span id="rpg-percent-text">50% tới cấp tiếp theo</span>
+                    </div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <div class="stat-val" id="rpg-iq-val">89/100</div>
+                        <div class="stat-lbl">Điểm Thông Minh IQ</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-val" id="rpg-mem-val">53</div>
+                        <div class="stat-lbl">Ký Ức Đã Học</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-val" id="rpg-msg-val">306</div>
+                        <div class="stat-lbl">Lượt Đàm Đạo</div>
+                    </div>
+                </div>
+
+                <div class="quest-section-title">🎨 Đổi Hào Quang Đôi Mắt (Phần thưởng Cấp bậc)</div>
+                <div class="aura-row">
+                    <button class="aura-btn active" onclick="setEyeAura('default', this)">🌊 Lam Băng (Lv.1)</button>
+                    <button class="aura-btn" onclick="setEyeAura('aura-emerald', this)">🌿 Lục Bảo (Lv.3)</button>
+                    <button class="aura-btn" onclick="setEyeAura('aura-gold', this)">👑 Hoàng Kim (Lv.5)</button>
+                    <button class="aura-btn" onclick="setEyeAura('aura-purple', this)">⚡ Tử Điện (Lv.7)</button>
+                </div>
+
+                <div class="quest-section-title">📜 Danh Sách Nhiệm Vụ Huấn Luyện Robot</div>
+                <div id="rpg-quest-list" style="display: flex; flex-direction: column; gap: 10px;">
+                    <div class="quest-desc">Đang tải danh sách nhiệm vụ từ Supabase...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <audio id="server-audio" style="display: none;" playsinline></audio>
 
     <script>
@@ -135,6 +280,7 @@
         let isBusy = false;
         let recognition = null;
         let wakeLock = null;
+        let currentAuraClass = '';
 
         // 1. GIỮ MÀN HÌNH ĐIỆN THOẠI LUÔN SÁNG
         async function requestWakeLock() {
@@ -182,8 +328,7 @@
         triggerLookAround();
 
         function setRobotState(state) {
-            body.className = '';
-            body.classList.add(`state-${state}`);
+            body.className = `state-${state}` + (currentAuraClass ? ` ${currentAuraClass}` : '');
             if (state === 'idle') {
                 pupilLeft.style.transform = 'translate(0, 0)';
                 pupilRight.style.transform = 'translate(0, 0)';
@@ -197,7 +342,93 @@
             }
         }
 
-        // 2. KHỞI TẠO NHẬN DIỆN GIỌNG NÓI ĐƠN PHIÊN CHUẨN XÁC (KHÔNG BAO GIỜ KẸT CÂU ĐẦU)
+        function setEyeAura(auraName, btnEl) {
+            currentAuraClass = auraName === 'default' ? '' : auraName;
+            document.querySelectorAll('.aura-btn').forEach(b => b.classList.remove('active'));
+            if (btnEl) btnEl.classList.add('active');
+            const currentState = body.classList.contains('state-speaking') ? 'speaking' :
+                                 body.classList.contains('state-thinking') ? 'thinking' :
+                                 body.classList.contains('state-listening') ? 'listening' : 'idle';
+            setRobotState(currentState);
+        }
+
+        // 2. HỆ THỐNG ĐỌC & HIỂN THỊ CẤP BẬC RPG ĐỘC LẬP (KHÔNG ẢNH HƯỞNG ÂM THANH)
+        async function loadRpgStatus() {
+            try {
+                const res = await fetch('/api/rpg');
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!data.ok || !data.dashboard) return;
+
+                const d = data.dashboard;
+                const shortLevel = (d.cap_bac_hien_tai || "⚔️ Lv.4").split("—")[0].trim();
+                const pct = d.phan_tram_len_cap || 0;
+                document.getElementById('rpg-badge-btn').innerText = `${shortLevel} (${pct}%)`;
+
+                document.getElementById('rpg-level-name').innerText = d.cap_bac_hien_tai || "⚔️ Lv.4 — Mưu Sĩ Trướng Tiền";
+                document.getElementById('rpg-stage-name').innerText = `${d.giai_doan_gan_ket || ''} • Mở khóa: ${d.dac_quyen_da_mo_khoa || ''}`;
+                document.getElementById('rpg-exp-fill').style.width = `${pct}%`;
+                document.getElementById('rpg-exp-text').innerText = `${d.tong_diem_exp || 0} / ${d.moc_exp_cap_tiep_theo || 3500} EXP`;
+                document.getElementById('rpg-percent-text').innerText = `${pct}% tới cấp kế tiếp`;
+
+                document.getElementById('rpg-iq-val').innerText = `${d.diem_thong_minh_iq_100 || 89}/100`;
+                document.getElementById('rpg-mem-val').innerText = d.tong_ky_uc_ca_nhan || 0;
+                document.getElementById('rpg-msg-val').innerText = d.tong_luot_dam_dao || 0;
+
+                const qContainer = document.getElementById('rpg-quest-list');
+                const quests = data.quests || [];
+                if (quests.length === 0) {
+                    qContainer.innerHTML = `<div class="quest-desc">Hãy chạy đoạn mã SQL số 06 trên Supabase để hiển thị danh sách 8 nhiệm vụ chi tiết.</div>`;
+                    return;
+                }
+
+                qContainer.innerHTML = quests.map(q => {
+                    const isDone = q.da_hoan_thanh === true;
+                    const safePrompt = (q.cau_noi_goi_y_de_hoan_thanh || "").replace(/"/g, '&quot;').replace(/'/g, "\\'");
+                    return `
+                        <div class="quest-item ${isDone ? 'done' : ''}">
+                            <div class="quest-top">
+                                <span class="quest-name">${q.ten_nhiem_vu}</span>
+                                <span class="quest-badge">${isDone ? '✅ ĐÃ HOÀN THÀNH' : `Tiến độ: ${q.tien_do_hien_tai}/${q.muc_tieu_can_dat}`} • +${q.diem_exp_thuong} EXP</span>
+                            </div>
+                            <div class="quest-desc">${q.mo_ta} (Thưởng: <b>${q.phan_thuong_mo_khoa || 'EXP'}</b>)</div>
+                            <div class="quest-prompt">💬 Gợi ý nói: "${q.cau_noi_goi_y_de_hoan_thanh}"</div>
+                            ${!isDone ? `
+                                <div class="quest-actions">
+                                    <button class="quest-act-btn voice" onclick="startQuestByVoice()">🎙️ Bật Mic tự nói</button>
+                                    <button class="quest-act-btn instant" onclick="runQuestPrompt('${safePrompt}')">⚡ Gửi câu mẫu này luôn</button>
+                                </div>
+                            ` : ''}
+                        </div>
+                    `;
+                }).join('');
+            } catch (e) {}
+        }
+
+        function openRpgModal() {
+            loadRpgStatus();
+            document.getElementById('rpg-modal').classList.add('open');
+        }
+
+        function closeRpgModal() {
+            document.getElementById('rpg-modal').classList.remove('open');
+        }
+
+        function startQuestByVoice() {
+            closeRpgModal();
+            if (!isListening) toggleVoiceSession();
+        }
+
+        function runQuestPrompt(promptText) {
+            closeRpgModal();
+            serverAudio.load();
+            handleUserSpeech(promptText);
+        }
+
+        // Tải huy hiệu RPG ngay khi mở trang
+        loadRpgStatus();
+
+        // 3. KHỞI TẠO NHẬN DIỆN GIỌNG NÓI ĐƠN PHIÊN CHUẨN XÁC CỦA BẢN V3.7
         if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
             const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
             recognition = new SpeechRec();
@@ -270,7 +501,7 @@
             }
         }
 
-        // 3. XỬ LÝ CÂU HỎI VÀ PHÁT ÂM THANH TRẢ LỜI
+        // 4. XỬ LÝ CÂU HỎI VÀ PHÁT ÂM THANH TRẢ LỜI (GIỮ NGUYÊN 100% V3.7)
         async function handleUserSpeech(query) {
             if (!query || query.trim().length < 2) {
                 isBusy = false;
@@ -297,6 +528,9 @@
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const data = await response.json();
+
+                // Cập nhật lại điểm EXP và tiến độ nhiệm vụ trên huy hiệu sau mỗi câu trả lời
+                loadRpgStatus();
 
                 if (data.audio) {
                     setRobotState('speaking');
