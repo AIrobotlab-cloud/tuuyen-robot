@@ -87,7 +87,49 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def send_rpg_json(self, payload, status=200):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
+        # V3.8.1: Public RPG showcase. Only allowlisted, aggregate, non-personal fields.
+        # Never include memory content, conversation text, account IDs, or quest prompts.
+        if self.path.split("?", 1)[0] == "/api/rpg":
+            try:
+                robot_code = "TUYUEN-001"  # fixed public demo instance, not caller-controlled
+                dashboard_fields = (
+                    "ma_robot,cap_bac_hien_tai,giai_doan_gan_ket,"
+                    "tong_diem_exp,moc_exp_cap_tiep_theo,phan_tram_len_cap,"
+                    "tong_ky_uc_ca_nhan,tong_luot_dam_dao,diem_thong_minh_iq_100"
+                )
+                quest_fields = (
+                    "ma_nhiem_vu,ten_nhiem_vu,tien_do_hien_tai,"
+                    "muc_tieu_can_dat,diem_exp_thuong,da_hoan_thanh"
+                )
+                db = bot_brain.supabase
+                dash_result = (db.table("robot_intelligence_dashboard")
+                    .select(dashboard_fields).eq("ma_robot", robot_code).limit(1).execute())
+                if not dash_result.data:
+                    self.send_rpg_json({"ok": False, "error": "RPG dashboard unavailable"}, 503)
+                    return
+                quest_result = (db.table("v_instance_quest_tracker")
+                    .select(quest_fields).eq("ma_robot", robot_code).limit(50).execute())
+                self.send_rpg_json({
+                    "ok": True,
+                    "dashboard": dash_result.data[0],
+                    "quests": sorted(quest_result.data or [], key=lambda q: q.get("ma_nhiem_vu") or "")
+                })
+            except Exception:
+                logger.exception("Public RPG endpoint failed")
+                self.send_rpg_json({"ok": False, "error": "RPG temporarily unavailable"}, 503)
+            return
+
         if self.path in ["/", "/index.html"] or self.path.startswith("/?"):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")

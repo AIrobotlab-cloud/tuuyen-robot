@@ -378,27 +378,24 @@
                 const qContainer = document.getElementById('rpg-quest-list');
                 const quests = data.quests || [];
                 if (quests.length === 0) {
-                    qContainer.innerHTML = `<div class="quest-desc">Hãy chạy đoạn mã SQL số 06 trên Supabase để hiển thị danh sách 8 nhiệm vụ chi tiết.</div>`;
+                    qContainer.innerHTML = `<div class="quest-desc">Chưa có thông tin nhiệm vụ công khai.</div>`;
                     return;
                 }
 
+                // Chỉ hiển thị metadata nhiệm vụ công khai, không hiển thị lời gợi ý riêng.
+                const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({
+                    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+                })[c]);
                 qContainer.innerHTML = quests.map(q => {
                     const isDone = q.da_hoan_thanh === true;
-                    const safePrompt = (q.cau_noi_goi_y_de_hoan_thanh || "").replace(/"/g, '&quot;').replace(/'/g, "\\'");
+                    const progress = `${Number(q.tien_do_hien_tai) || 0}/${Number(q.muc_tieu_can_dat) || 0}`;
+                    const reward = Number(q.diem_exp_thuong) || 0;
                     return `
                         <div class="quest-item ${isDone ? 'done' : ''}">
                             <div class="quest-top">
-                                <span class="quest-name">${q.ten_nhiem_vu}</span>
-                                <span class="quest-badge">${isDone ? '✅ ĐÃ HOÀN THÀNH' : `Tiến độ: ${q.tien_do_hien_tai}/${q.muc_tieu_can_dat}`} • +${q.diem_exp_thuong} EXP</span>
+                                <span class="quest-name">${escapeHtml(q.ten_nhiem_vu)}</span>
+                                <span class="quest-badge">${isDone ? '✅ ĐÃ HOÀN THÀNH' : `Tiến độ: ${progress}`} • +${reward} EXP</span>
                             </div>
-                            <div class="quest-desc">${q.mo_ta} (Thưởng: <b>${q.phan_thuong_mo_khoa || 'EXP'}</b>)</div>
-                            <div class="quest-prompt">💬 Gợi ý nói: "${q.cau_noi_goi_y_de_hoan_thanh}"</div>
-                            ${!isDone ? `
-                                <div class="quest-actions">
-                                    <button class="quest-act-btn voice" onclick="startQuestByVoice()">🎙️ Bật Mic tự nói</button>
-                                    <button class="quest-act-btn instant" onclick="runQuestPrompt('${safePrompt}')">⚡ Gửi câu mẫu này luôn</button>
-                                </div>
-                            ` : ''}
                         </div>
                     `;
                 }).join('');
