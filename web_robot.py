@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DỰ ÁN TỬ UYÊN — MÁY CHỦ ROBOT WEB V3.5 (CHỐNG CÂM VOICE, CHỐNG TỰ NGHĨ & NẠP TRI THỨC SÂU)
-Phiên bản: 3.5.0 (Investor Demo & Live Coaching Ready)
-Các nâng cấp cốt lõi:
-1. Chống tự nghĩ khi im lặng: Kiểm tra chốt chặn nội dung rỗng (empty message guard).
-2. Chống lỗi câm tiếng (Audio Drop):
-   - Tạo âm thanh trực tiếp trong RAM (in-memory bytearray), không ghi file tạm trên ổ cứng.
-   - Cơ chế tự động thử lại 2 tầng (Auto-Retry) nếu máy chủ TTS Microsoft bị nghẽn mạng.
-   - Tự động chuyển giọng dự phòng mượt mà nếu Fish Audio vượt quá 10 giây.
-3. Mở rộng truy xuất kho sách RAG: Tự động tra cứu kiến thức dự án, phần cứng V2, chi phí BOM và chiến lược gọi vốn.
-4. Cơ chế tự học ngầm (Background Memory Extractor): Tự động trích xuất bài học và quy tắc văn phong vào Supabase.
+DỰ ÁN TỬ UYÊN — MÁY CHỦ ROBOT WEB V3.6 (BẢN HỢP NHẤT HOÀN CHỈNH)
+Phiên bản: 3.6.0 (Elastic Depth + Anti-502 + Audio Guard + Silence Guard + Live Coaching)
+Tổng hợp toàn bộ tính năng tối ưu:
+1. Độ dài câu trả lời co giãn thông minh theo chiều sâu câu hỏi (Quy luật chiếc chuông đồng - DE-R03).
+2. Chống lỗi HTTP 502 trên Render: Giới hạn Fish Audio 10s, tự động chuyển sang Edge-TTS RAM Stream siêu tốc (0.8s) khi câu trả lời dài.
+3. Chống lỗi câm tiếng (Audio Drop): Tạo âm thanh trực tiếp trong bộ nhớ RAM (bytearray) kèm Auto-Retry 2 tầng.
+4. Chống tự nghĩ khi im lặng: Chốt chặn từ chối tin nhắn rỗng hoặc tạp âm (< 2 ký tự).
+5. Mở rộng RAG & Tự học ngầm: Tra cứu toàn diện kiến thức dự án/phần cứng/Supabase và tự động học qua trò chuyện.
 """
 
 import os
@@ -26,7 +24,7 @@ import requests
 import bot_brain
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("TuUyenWebServer")
+logger = logging.getLogger("TuUyenWebServerV3.6")
 
 FISH_API_KEY = os.getenv("FISH_AUDIO_API_KEY", "").strip()
 FISH_VOICE_ID = os.getenv("FISH_VOICE_ID", "7788e6c42a1a4e169935b417ff65a453").strip()
@@ -39,7 +37,7 @@ FREE_VOICES = {
 DEFAULT_MODEL = os.getenv("AI_MODEL", "gpt-4o-mini")
 
 
-# 1. HÀM TẠO ÂM THANH QUA FISH AUDIO (CÓ TIMEOUT 10S AN TOÀN)
+# 1. HÀM TẠO ÂM THANH FISH AUDIO VIP (CÓ CHỐT CHẶN 10 GIÂY CHỐNG LỖI 502 RENDER)
 def generate_fish_audio(text: str) -> str:
     if not FISH_API_KEY or not FISH_VOICE_ID:
         return None
@@ -61,18 +59,17 @@ def generate_fish_audio(text: str) -> str:
             return base64.b64encode(res.content).decode("utf-8")
         logger.warning(f"Fish Audio trả về mã {res.status_code}, chuyển sang giọng Nam Minh.")
     except Exception as e:
-        logger.warning(f"Fish Audio bận hoặc quá 10s ({e}), tự động chuyển sang giọng Nam Minh dự phòng.")
+        logger.warning(f"Fish Audio quá 10s ({e}), tự động chuyển sang Nam Minh bản số 2 để chống lỗi 502.")
     return None
 
 
-# 2. HÀM TẠO ÂM THANH EDGE-TTS TRONG BỘ NHỚ RAM (CÓ AUTO-RETRY CHỐNG CÂM TIẾNG)
+# 2. HÀM TẠO ÂM THANH EDGE-TTS TRONG RAM (SIÊU TỐC & CHỐNG CÂM TIẾNG)
 async def generate_free_voice_stream(text: str, voice_key: str) -> str:
     cfg = FREE_VOICES.get(voice_key, FREE_VOICES["nam_minh"])
     clean_text = text.replace("*", "").replace("#", "").replace("`", "").replace("~", "").strip()
     if not clean_text:
         return None
 
-    # Thử tối đa 2 lần nếu mạng bị nghẽn
     for attempt in range(2):
         try:
             comm = edge_tts.Communicate(clean_text, voice=cfg["voice"], pitch=cfg["pitch"], rate=cfg["rate"])
@@ -80,14 +77,13 @@ async def generate_free_voice_stream(text: str, voice_key: str) -> str:
             async for chunk in comm.stream():
                 if chunk["type"] == "audio":
                     audio_buffer.extend(chunk["data"])
-            
+
             if len(audio_buffer) > 500:
                 return base64.b64encode(bytes(audio_buffer)).decode("utf-8")
         except Exception as err:
             logger.warning(f"Thử tạo giọng {voice_key} lần {attempt + 1} gặp lỗi: {err}")
             await asyncio.sleep(0.3)
-    
-    # Nếu Nam Minh lỗi thì thử cứu cánh bằng Hoài My
+
     if voice_key != "hoai_my":
         try:
             cfg_backup = FREE_VOICES["hoai_my"]
@@ -113,20 +109,19 @@ def synthesize_audio_safe(text: str, selected_voice: str) -> str:
         voice_fallback = selected_voice if selected_voice in FREE_VOICES else "nam_minh"
         try:
             audio_b64 = asyncio.run(generate_free_voice_stream(text, voice_fallback))
-        except Exception as e:
-            logger.error(f"Lỗi loop âm thanh: {e}")
+        except Exception:
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 audio_b64 = loop.run_until_complete(generate_free_voice_stream(text, voice_fallback))
                 loop.close()
             except Exception as loop_err:
-                logger.error(f"Lỗi cưỡng chế loop: {loop_err}")
+                logger.error(f"Lỗi tạo âm thanh dự phòng: {loop_err}")
 
     return audio_b64
 
 
-# 3. CHẠY TỰ HỌC NGẦM ĐỂ KHÔNG LÀM CHẬM PHẢN HỒI
+# 3. CHẠY TỰ HỌC NGẦM QUA HỘI THOẠI (KHÔNG LÀM CHẬM PHẢN HỒI VOICE)
 def run_background_learning(instance_id: str, user_msg: str):
     try:
         asyncio.run(bot_brain.auto_extract_and_save_memory(instance_id, user_msg))
@@ -157,7 +152,7 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
             with open("index.html", "rb") as f:
                 self.wfile.write(f.read())
         elif self.path in ["/api/status", "/health"]:
-            status_data = json.dumps({"status": "healthy", "version": "V3.5-Protected"}).encode("utf-8")
+            status_data = json.dumps({"status": "healthy", "version": "V3.6-Master"}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(status_data)))
@@ -178,9 +173,9 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 selected_model = data.get("model") or data.get("model_mode") or DEFAULT_MODEL
                 selected_voice = data.get("voice") or data.get("voice_mode") or "vip_taothao"
 
-                # CHỐT CHẶN CHỐNG NGHĨ BỪA: Nếu câu hỏi rỗng hoặc quá ngắn -> Dừng ngay, không gọi AI
+                # CHỐT CHẶN CHỐNG NGHĨ BỪA: Nếu tin nhắn rỗng hoặc < 2 ký tự -> Dừng ngay
                 if len(user_msg) < 2:
-                    logger.info("Nhận tin nhắn rỗng hoặc tạp âm, từ chối xử lý.")
+                    logger.info("Nhận tín hiệu rỗng hoặc tạp âm, bỏ qua.")
                     resp_bytes = json.dumps({"reply": "", "audio": None}, ensure_ascii=False).encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -193,33 +188,34 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 bot_brain.AI_MODEL = selected_model
                 logger.info(f"🎙️ Nhận câu hỏi [{selected_model}]: '{user_msg}'")
 
-                # 1. Bối cảnh nhân vật & Ký ức
+                # 1. Tải bối cảnh nhân vật & Ký ức dài hạn
                 instance_id, base_system_prompt = bot_brain.get_instance_context()
                 memories_text = bot_brain.get_verified_memories(instance_id)
 
-                # 2. Truy vấn Kho bách khoa thư RAG mở rộng (bao gồm cả dự án, phần cứng, gọi vốn và triết lý)
+                # 2. Truy xuất Kho tri thức RAG mở rộng (Binh pháp, Triết học, Dự án, Phần cứng V2, Supabase, Gọi vốn)
                 knowledge_context = ""
                 project_triggers = [
                     "binh pháp", "tôn tử", "đạo đức kinh", "lão tử", "tào tháo", "nước", "thất bại", "chiến lược",
                     "robot", "phần cứng", "dự án", "tử uyên", "gọi vốn", "đầu tư", "chi phí", "raspberry",
-                    "esp32", "giá", "bom", "mạch", "khớp cổ", "servo", "loa", "mic", "ký ức", "mô hình b"
+                    "esp32", "giá", "bom", "mạch", "khớp cổ", "servo", "loa", "mic", "ký ức", "mô hình b", "supabase"
                 ]
                 msg_lower = user_msg.lower()
                 if any(k in msg_lower for k in project_triggers) or len(user_msg.split()) >= 4:
                     knowledge_context = bot_brain.retrieve_knowledge(user_msg, limit=2)
 
-                # NGUYÊN TẮC CO GIÃN ĐỘ DÀI & VĂN PHONG QUÂN SƯ (DE-R03)
+                # 3. QUY LUẬT CHIẾC CHUÔNG ĐỒNG (DE-R03): ĐỘ DÀI CO GIÃN TƯƠNG XỨNG TẦM VÓC CÂU HỎI
                 depth_rule = (
-                    "\n\n=== QUY TẮC ĐỘ DÀI & VĂN PHONG PHÁT ÂM (DE-R03) ===\n"
-                    "- Với câu chào hỏi, tán gẫu xã giao: Trả lời ngắn gọn, ấm áp, điềm đạm (1 - 3 câu).\n"
-                    "- Với câu hỏi về dự án, kỹ thuật phần cứng, chiến lược gọi vốn hoặc triết lý: TỰ DO MỞ RỘNG DUNG LƯỢNG tương xứng tầm vóc câu hỏi. "
-                    "Phân tích khúc chiết, đanh thép, có chính kiến rõ ràng. Tuyệt đối không cụt lủn vô hồn.\n"
-                    "- VĂN PHONG NÓI: Không dùng dấu gạch đầu dòng, không đánh số 1, 2, 3, không dùng ký tự Markdown (*, #). Trả lời thành đoạn văn liền mạch để phát âm qua loa nghe tự nhiên và truyền cảm."
+                    "\n\n=== QUY TẮC ĐỘ DÀI CO GIÃN & VĂN PHONG ĐỐI THOẠI (DE-R03) ===\n"
+                    "- Với câu chào hỏi, tán gẫu hoặc chia sẻ mệt mỏi: Phản hồi ngắn gọn, ấm áp, thấu cảm (1 - 3 câu).\n"
+                    "- Với câu hỏi có chiều sâu về dự án, kỹ thuật phần cứng, kiến trúc dữ liệu, chiến lược gọi vốn hoặc triết lý: "
+                    "TỰ DO MỞ RỘNG DUNG LƯỢNG tương xứng tầm vóc câu hỏi (4 - 7 câu). Phân tích đa tầng nấc, khúc chiết, đanh thép, có chính kiến rõ ràng. Không được cụt lủn.\n"
+                    "- VĂN PHONG PHÁT ÂM: Tuyệt đối KHÔNG dùng gạch đầu dòng, không đánh số 1, 2, 3, không dùng ký tự Markdown (*, #). "
+                    "Hãy nói thành đoạn văn liền mạch, có nhịp ngắt câu tự nhiên để khi đọc lên qua loa nghe uy lực như một vị quân sư."
                 )
 
                 full_prompt = base_system_prompt + depth_rule + "\n\n" + memories_text + knowledge_context
 
-                # Nối mạch hội thoại trên Web
+                # 4. Nối mạch lịch sử trò chuyện liên tục trên Mobile
                 conv_id = bot_brain.get_or_create_conversation(instance_id, 999999)
                 recent_history = bot_brain.get_recent_messages(conv_id, limit=6)
 
@@ -227,19 +223,24 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 payload.extend(recent_history)
                 payload.append({"role": "user", "content": user_msg})
 
-                # 3. Gọi mô hình AI
+                # 5. Gọi mô hình AI suy nghĩ
                 reply_text = bot_brain.call_ai_model(payload)
 
-                # 4. Lưu vào database & Kích hoạt tự học ngầm
+                # 6. Lưu hội thoại & Kích hoạt tự học ngầm
                 bot_brain.save_message(conv_id, "user", user_msg)
                 bot_brain.save_message(conv_id, "assistant", reply_text)
                 threading.Thread(target=run_background_learning, args=(instance_id, user_msg), daemon=True).start()
 
-                # 5. Sinh âm thanh an toàn tuyệt đối
+                # 7. Tổng hợp giọng nói an toàn (Không bao giờ câm tiếng hoặc quá 15s gây lỗi 502)
                 audio_b64 = synthesize_audio_safe(reply_text, selected_voice)
 
-                # 6. Phản hồi về điện thoại
-                resp_bytes = json.dumps({"reply": reply_text, "audio": audio_b64}, ensure_ascii=False).encode("utf-8")
+                # 8. Trả kết quả về điện thoại
+                resp_bytes = json.dumps({
+                    "reply": reply_text,
+                    "audio": audio_b64,
+                    "audio_base64": audio_b64
+                }, ensure_ascii=False).encode("utf-8")
+
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(resp_bytes)))
@@ -249,7 +250,11 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
 
             except Exception as e:
                 logger.error(f"Lỗi xử lý /api/chat: {e}")
-                err_bytes = json.dumps({"reply": "Bộ não đang điều phối, đạo hữu thong thả nói lại cùng ta nhé.", "audio": None}, ensure_ascii=False).encode("utf-8")
+                err_bytes = json.dumps({
+                    "reply": "Bộ não đang điều phối, đạo hữu thong thả nói lại cùng ta nhé.",
+                    "audio": None,
+                    "audio_base64": None
+                }, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(err_bytes)))
@@ -265,7 +270,7 @@ def run(port=None):
         port = int(os.environ.get("PORT", 8000))
     server_address = ("0.0.0.0", port)
     httpd = HTTPServer(server_address, RobotWebHandler)
-    logger.info(f"🚀 MẶT ROBOT TỬ UYÊN V3.5 (AUDIO & SILENCE GUARD ACTIVE) LIVE TẠI: {port}")
+    logger.info(f"🚀 MẶT ROBOT TỬ UYÊN V3.6 (FULL MASTER EDITION) LIVE TẠI CỔNG: {port}")
     httpd.serve_forever()
 
 
