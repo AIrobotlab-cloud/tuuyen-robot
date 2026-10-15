@@ -281,6 +281,10 @@
         let recognition = null;
         let wakeLock = null;
         let currentAuraClass = '';
+        let audioSession = 0;
+        let audioWatchdog = null;
+        let audioProgressWatchdog = null;
+        let voiceErrorCode = '';
 
         // 1. GIỮ MÀN HÌNH ĐIỆN THOẠI LUÔN SÁNG
         async function requestWakeLock() {
@@ -474,13 +478,111 @@
             }
         }
 
+        // V3.8.2: giám sát phát tiếng. Không đưa nội dung hội thoại vào log.
+        function clearAudioWatchdogs() {
+            if (audioWatchdog) clearTimeout(audioWatchdog);
+            if (audioProgressWatchdog) clearInterval(audioProgressWatchdog);
+            audioWatchdog = null;
+            audioProgressWatchdog = null;
+        }
+
+        function resetAudioElement() {
+            clearAudioWatchdogs();
+            serverAudio.onended = null;
+            serverAudio.onerror = null;
+            serverAudio.onplaying = null;
+            serverAudio.onstalled = null;
+            serverAudio.pause();
+            serverAudio.removeAttribute('src');
+            serverAudio.load();
+        }
+
+        function reportVoiceError(code) {
+            voiceErrorCode = code;
+            console.warn('[TU-VOICE]', code, {
+                networkState: serverAudio.networkState,
+                readyState: serverAudio.readyState,
+                mediaError: serverAudio.error ? serverAudio.error.code : null
+            });
+            isBusy = false;
+            isListening = false;
+            micBtn.classList.remove('active');
+            setRobotState('idle');
+            statusText.innerText = 'LỖI GIỌNG: ' + code;
+        }
+
+        function playReplyAudio(base64Audio) {
+            audioSession += 1;
+            const session = audioSession;
+            resetAudioElement();
+            let playbackStarted = false;
+            let lastPosition = 0;
+            let lastAdvance = Date.now();
+            const isCurrent = () => session === audioSession;
+            const finish = () => {
+                if (!isCurrent()) return;
+                audioSession += 1;
+                resetAudioElement();
+                isBusy = false;
+                setRobotState('idle');
+                setTimeout(startMicClean, 600);
+            };
+            const fail = (code) => {
+                if (!isCurrent()) return;
+                // Lưu thông tin lỗi trước khi loại bỏ nguồn âm thanh.
+                console.warn('[TU-VOICE] failed:', code,
+                    serverAudio.error ? serverAudio.error.code : 'no-media-error');
+                audioSession += 1;
+                resetAudioElement();
+                reportVoiceError(code);
+            };
+
+            serverAudio.onended = finish;
+            serverAudio.onerror = () => fail('MEDIA_ERROR');
+            serverAudio.onplaying = () => {
+                if (!isCurrent()) return;
+                playbackStarted = true;
+                if (audioProgressWatchdog) clearInterval(audioProgressWatchdog);
+                setRobotState('speaking');
+                if (audioWatchdog) clearTimeout(audioWatchdog);
+                audioWatchdog = null;
+                lastPosition = serverAudio.currentTime;
+                lastAdvance = Date.now();
+                audioProgressWatchdog = setInterval(() => {
+                    if (!isCurrent() || serverAudio.paused || serverAudio.ended) return;
+                    if (serverAudio.currentTime > lastPosition + 0.05) {
+                        lastPosition = serverAudio.currentTime;
+                        lastAdvance = Date.now();
+                    } else if (Date.now() - lastAdvance > 12000) {
+                        fail('PLAY_STALLED');
+                    }
+                }, 2000);
+            };
+            serverAudio.onstalled = () => console.warn('[TU-VOICE] stalled event');
+            serverAudio.src = 'data:audio/mpeg;base64,' + base64Audio;
+            audioWatchdog = setTimeout(() => {
+                if (!playbackStarted) fail('PLAY_TIMEOUT');
+            }, 15000);
+            let playResult;
+            try {
+                playResult = serverAudio.play();
+            } catch (e) {
+                fail('PLAY_THROW');
+                return;
+            }
+            if (playResult && typeof playResult.catch === 'function') {
+                playResult.catch(e => fail(e && e.name === 'NotAllowedError' ? 'PLAY_BLOCKED' : 'PLAY_REJECTED'));
+            }
+        }
+
         function toggleVoiceSession() {
             requestWakeLock();
 
             if (body.classList.contains('state-speaking')) {
-                serverAudio.pause();
-                serverAudio.currentTime = 0;
+                audioSession += 1;
+                resetAudioElement();
                 isBusy = false;
+                setRobotState('idle');
                 startMicClean();
                 return;
             }
@@ -488,7 +590,6 @@
             if (!recognition) return;
 
             if (!isListening) {
-                serverAudio.load();
                 startMicClean();
             } else {
                 isListening = false;
@@ -530,42 +631,14 @@
                 loadRpgStatus();
 
                 if (data.audio) {
-                    setRobotState('speaking');
-                    serverAudio.src = "data:audio/mp3;base64," + data.audio;
-
-                    serverAudio.onended = () => {
-                        isBusy = false;
-                        setRobotState('idle');
-                        setTimeout(() => {
-                            startMicClean();
-                        }, 600);
-                    };
-
-                    serverAudio.onerror = () => {
-                        isBusy = false;
-                        isListening = false;
-                        micBtn.classList.remove('active');
-                        setRobotState('idle');
-                    };
-
-                    serverAudio.play().catch(() => {
-                        isBusy = false;
-                        isListening = false;
-                        micBtn.classList.remove('active');
-                        setRobotState('idle');
-                    });
+                    playReplyAudio(data.audio);
                 } else {
-                    isBusy = false;
-                    isListening = false;
-                    micBtn.classList.remove('active');
-                    setRobotState('idle');
+                    reportVoiceError('SERVER_NO_AUDIO');
                 }
 
             } catch (err) {
-                isBusy = false;
-                isListening = false;
-                micBtn.classList.remove('active');
-                setRobotState('idle');
+                console.warn('[TU-VOICE] chat request failed:', err && err.name);
+                reportVoiceError('CHAT_REQUEST');
             }
         }
     </script>
