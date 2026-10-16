@@ -200,14 +200,24 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 payload.extend(clean_history)
                 payload.append({"role": "user", "content": user_msg})
 
+                                
                 # 5. Gọi mô hình AI
+                llm_start = time.perf_counter()
+                logger.info("[TY-DIAG] LLM_START")
                 reply_text = bot_brain.call_ai_model(payload)
+                llm_elapsed = time.perf_counter() - llm_start
+                logger.info("[TY-DIAG] LLM_DONE duration=%.2fs", llm_elapsed)
+
+
 
                 # 6. Lưu tin nhắn hợp lệ vào CSDL
                 bot_brain.save_message(conv_id, "user", user_msg)
                 bot_brain.save_message(conv_id, "assistant", reply_text)
 
+                
                 # 7. Sinh âm thanh theo chuẩn ổn định của V3.4
+                tts_start = time.perf_counter()
+                logger.info("[TY-DIAG] TTS_START voice=%s", selected_voice)
                 audio_b64 = None
                 if selected_voice == "vip_taothao":
                     audio_b64 = generate_fish_audio(reply_text)
@@ -220,6 +230,10 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                         audio_b64 = loop.run_until_complete(generate_free_voice(reply_text, voice_fallback))
                     finally:
                         loop.close()
+
+                
+                tts_elapsed = time.perf_counter() - tts_start
+                logger.info("[TY-DIAG] TTS_DONE duration=%.2fs audio_ok=%s", tts_elapsed, bool(audio_b64))
 
                 # 8. Phản hồi về điện thoại
                 resp_bytes = json.dumps({"reply": reply_text, "audio": audio_b64}, ensure_ascii=False).encode("utf-8")
