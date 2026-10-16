@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DỰ ÁN TỬ UYÊN — MÁY CHỦ ROBOT WEB V3.7 (ỔN ĐỊNH TUYỆT ĐỐI ÂM THANH & HỘI THOẠI LIÊN TỤC)
+DỰ ÁN TỬ UYÊN — MÁY CHỦ ROBOT WEB V3.8.4 (CHỐNG NGHẼN HTTP & CHẨN ĐOÁN LLM/TTS)
 Khắc phục triệt để:
 1. Tách luồng hội thoại sạch (bỏ qua toàn bộ tin nhắn rỗng cũ trong CSDL làm AI bị kẹt ở câu đầu tiên).
 2. Khôi phục cơ chế ghi file âm thanh chuẩn của V3.4 kèm chống trùng file, đảm bảo phát tiếng 100%.
-3. Không dùng đa luồng xung đột kết nối Supabase; giữ trọn vẹn độ sâu câu trả lời (DE-R03) và kho sách RAG.
+3. HTTP nhiều luồng để nhận kết nối/health check; khóa tuần tự các thao tác dùng bot_brain/Supabase.
+4. Giữ nguyên DE-R03, RAG, RPG, giọng nói và các API hiện hành.
 """
 
 import os
@@ -14,13 +15,18 @@ import json
 import base64
 import asyncio
 import logging
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+import threading
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import edge_tts
 import requests
 import bot_brain
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger("TuUyenWebServer")
+
+# Bảo vệ bot_brain.AI_MODEL, phiên chat và Supabase dùng chung.
+# GET /healthz vẫn được trả lời độc lập khi một lượt chat đang chạy.
+BRAIN_LOCK = threading.Lock()
 
 FISH_API_KEY = os.getenv("FISH_AUDIO_API_KEY", "").strip()
 FISH_VOICE_ID = os.getenv("FISH_VOICE_ID", "7788e6c42a1a4e169935b417ff65a453").strip()
@@ -98,36 +104,41 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self.path.split("?", 1)[0] == "/healthz":
+            self.send_rpg_json({"ok": True, "service": "tuuyen-robot"})
+            return
+
         # V3.8.1: Public RPG showcase. Only allowlisted, aggregate, non-personal fields.
         # Never include memory content, conversation text, account IDs, or quest prompts.
         if self.path.split("?", 1)[0] == "/api/rpg":
-            try:
-                robot_code = "TUYUEN-001"  # fixed public demo instance, not caller-controlled
-                dashboard_fields = (
-                    "ma_robot,cap_bac_hien_tai,giai_doan_gan_ket,"
-                    "tong_diem_exp,moc_exp_cap_tiep_theo,phan_tram_len_cap,"
-                    "tong_ky_uc_ca_nhan,tong_luot_dam_dao,diem_thong_minh_iq_100"
-                )
-                quest_fields = (
-                    "ma_nhiem_vu,ten_nhiem_vu,tien_do_hien_tai,"
-                    "muc_tieu_can_dat,diem_exp_thuong,da_hoan_thanh"
-                )
-                db = bot_brain.supabase
-                dash_result = (db.table("robot_intelligence_dashboard")
-                    .select(dashboard_fields).eq("ma_robot", robot_code).limit(1).execute())
-                if not dash_result.data:
-                    self.send_rpg_json({"ok": False, "error": "RPG dashboard unavailable"}, 503)
-                    return
-                quest_result = (db.table("v_instance_quest_tracker")
-                    .select(quest_fields).eq("ma_robot", robot_code).limit(50).execute())
-                self.send_rpg_json({
-                    "ok": True,
-                    "dashboard": dash_result.data[0],
-                    "quests": sorted(quest_result.data or [], key=lambda q: q.get("ma_nhiem_vu") or "")
-                })
-            except Exception:
-                logger.exception("Public RPG endpoint failed")
-                self.send_rpg_json({"ok": False, "error": "RPG temporarily unavailable"}, 503)
+            with BRAIN_LOCK:
+                try:
+                    robot_code = "TUYUEN-001"  # fixed public demo instance, not caller-controlled
+                    dashboard_fields = (
+                        "ma_robot,cap_bac_hien_tai,giai_doan_gan_ket,"
+                        "tong_diem_exp,moc_exp_cap_tiep_theo,phan_tram_len_cap,"
+                        "tong_ky_uc_ca_nhan,tong_luot_dam_dao,diem_thong_minh_iq_100"
+                    )
+                    quest_fields = (
+                        "ma_nhiem_vu,ten_nhiem_vu,tien_do_hien_tai,"
+                        "muc_tieu_can_dat,diem_exp_thuong,da_hoan_thanh"
+                    )
+                    db = bot_brain.supabase
+                    dash_result = (db.table("robot_intelligence_dashboard")
+                        .select(dashboard_fields).eq("ma_robot", robot_code).limit(1).execute())
+                    if not dash_result.data:
+                        self.send_rpg_json({"ok": False, "error": "RPG dashboard unavailable"}, 503)
+                        return
+                    quest_result = (db.table("v_instance_quest_tracker")
+                        .select(quest_fields).eq("ma_robot", robot_code).limit(50).execute())
+                    self.send_rpg_json({
+                        "ok": True,
+                        "dashboard": dash_result.data[0],
+                        "quests": sorted(quest_result.data or [], key=lambda q: q.get("ma_nhiem_vu") or "")
+                    })
+                except Exception:
+                    logger.exception("Public RPG endpoint failed")
+                    self.send_rpg_json({"ok": False, "error": "RPG temporarily unavailable"}, 503)
             return
 
         if self.path in ["/", "/index.html"] or self.path.startswith("/?"):
@@ -160,10 +171,10 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 self.wfile.write(resp_bytes)
                 return
 
-            bot_brain.AI_MODEL = selected_model
-            logger.info(f"🎙️ Nhận câu hỏi ({selected_model}): {user_msg}")
-
+            BRAIN_LOCK.acquire()
             try:
+                bot_brain.AI_MODEL = selected_model
+                logger.info("🎙️ Nhận câu hỏi model=%s length=%s", selected_model, len(user_msg))
                 # 1. Bối cảnh nhân vật & Ký ức dài hạn
                 instance_id, base_system_prompt = bot_brain.get_instance_context()
                 memories_text = bot_brain.get_verified_memories(instance_id)
@@ -200,7 +211,6 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 payload.extend(clean_history)
                 payload.append({"role": "user", "content": user_msg})
 
-                                
                 # 5. Gọi mô hình AI
                 llm_start = time.perf_counter()
                 logger.info("[TY-DIAG] LLM_START")
@@ -208,13 +218,10 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 llm_elapsed = time.perf_counter() - llm_start
                 logger.info("[TY-DIAG] LLM_DONE duration=%.2fs", llm_elapsed)
 
-
-
                 # 6. Lưu tin nhắn hợp lệ vào CSDL
                 bot_brain.save_message(conv_id, "user", user_msg)
                 bot_brain.save_message(conv_id, "assistant", reply_text)
 
-                
                 # 7. Sinh âm thanh theo chuẩn ổn định của V3.4
                 tts_start = time.perf_counter()
                 logger.info("[TY-DIAG] TTS_START voice=%s", selected_voice)
@@ -231,7 +238,6 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                     finally:
                         loop.close()
 
-                
                 tts_elapsed = time.perf_counter() - tts_start
                 logger.info("[TY-DIAG] TTS_DONE duration=%.2fs audio_ok=%s", tts_elapsed, bool(audio_b64))
 
@@ -253,14 +259,16 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 self.send_cors_headers()
                 self.end_headers()
                 self.wfile.write(err_bytes)
+            finally:
+                BRAIN_LOCK.release()
 
 
 def run(port=None):
     if port is None:
         port = int(os.environ.get("PORT", 8000))
     server_address = ("0.0.0.0", port)
-    httpd = HTTPServer(server_address, RobotWebHandler)
-    logger.info(f"🚀 MẶT ROBOT TỬ UYÊN V3.7 (STABLE AUDIO & MULTI-TURN) LIVE TẠI: {port}")
+    httpd = ThreadingHTTPServer(server_address, RobotWebHandler)
+    logger.info(f"🚀 MẶT ROBOT TỬ UYÊN V3.8.4 (THREADED HTTP + SERIALIZED BRAIN + DIAG) LIVE TẠI: {port}")
     httpd.serve_forever()
 
 
