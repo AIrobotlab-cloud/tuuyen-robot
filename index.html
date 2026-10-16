@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Robot Tử Uyên — Pure Cyber Face & RPG V3.8.5</title>
+    <title>Robot Tử Uyên — Pure Cyber Face & RPG V3.8</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-user-select: none; }
         body {
@@ -511,7 +511,7 @@
             statusText.innerText = 'LỖI GIỌNG: ' + code;
         }
 
-        function playReplyAudio(base64Audio, onNext = null) {
+        function playReplyAudio(base64Audio) {
             audioSession += 1;
             const session = audioSession;
             resetAudioElement();
@@ -523,14 +523,9 @@
                 if (!isCurrent()) return;
                 audioSession += 1;
                 resetAudioElement();
-                if (onNext) {
-                    setRobotState('thinking');
-                    onNext();
-                } else {
-                    isBusy = false;
-                    setRobotState('idle');
-                    setTimeout(startMicClean, 600);
-                }
+                isBusy = false;
+                setRobotState('idle');
+                setTimeout(startMicClean, 600);
             };
             const fail = (code) => {
                 if (!isCurrent()) return;
@@ -580,42 +575,6 @@
             }
         }
 
-        // V3.8.5: while one segment plays, fetch the next; play in order.
-        async function fetchVoiceChunk(job, index) {
-            const url = `/api/voice_chunk?job=${encodeURIComponent(job)}&n=${index}`;
-            const response = await fetch(url, { cache: 'no-store' });
-            if (!response.ok) throw new Error(`VOICE_CHUNK_HTTP_${response.status}`);
-            const data = await response.json();
-            if (!data.ok || !data.audio) throw new Error('VOICE_CHUNK_EMPTY');
-            return data.audio;
-        }
-
-        function playVoiceSequence(firstAudio, job, total) {
-            if (!job || !Number.isInteger(total) || total < 2) {
-                playReplyAudio(firstAudio);
-                return;
-            }
-            let nextIndex = 1;
-            let prefetched = fetchVoiceChunk(job, nextIndex);
-            // Attach a handler immediately: a failed prefetch must not become unhandled.
-            prefetched = prefetched.then(audio => ({ audio }), error => ({ error }));
-            const advance = async () => {
-                const result = await prefetched;
-                if (result.error) {
-                    console.warn('[TU-VOICE] next chunk unavailable:', result.error.name);
-                    reportVoiceError('CHUNK_REQUEST');
-                    return;
-                }
-                nextIndex++;
-                if (nextIndex < total) {
-                    prefetched = fetchVoiceChunk(job, nextIndex).then(
-                        audio => ({ audio }), error => ({ error }));
-                }
-                playReplyAudio(result.audio, nextIndex < total ? advance : null);
-            };
-            playReplyAudio(firstAudio, advance);
-        }
-
         function toggleVoiceSession() {
             requestWakeLock();
 
@@ -642,7 +601,6 @@
 
         // 4. XỬ LÝ CÂU HỎI VÀ PHÁT ÂM THANH TRẢ LỜI (GIỮ NGUYÊN 100% V3.7)
         async function handleUserSpeech(query) {
-            if (isBusy) return;
             if (!query || query.trim().length < 2) {
                 isBusy = false;
                 isListening = false;
@@ -673,7 +631,7 @@
                 loadRpgStatus();
 
                 if (data.audio) {
-                    playVoiceSequence(data.audio, data.voice_job, data.voice_chunks);
+                    playReplyAudio(data.audio);
                 } else {
                     reportVoiceError('SERVER_NO_AUDIO');
                 }

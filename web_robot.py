@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DỰ ÁN TỬ UYÊN — MÁY CHỦ ROBOT WEB V3.8.5 (FAST VOICE FIRST CHUNK & CHẨN ĐOÁN LLM/TTS)
+DỰ ÁN TỬ UYÊN — MÁY CHỦ ROBOT WEB V3.8.4 (CHỐNG NGHẼN HTTP & CHẨN ĐOÁN LLM/TTS)
 Khắc phục triệt để:
 1. Tách luồng hội thoại sạch (bỏ qua toàn bộ tin nhắn rỗng cũ trong CSDL làm AI bị kẹt ở câu đầu tiên).
 2. Khôi phục cơ chế ghi file âm thanh chuẩn của V3.4 kèm chống trùng file, đảm bảo phát tiếng 100%.
@@ -16,9 +16,6 @@ import base64
 import asyncio
 import logging
 import threading
-import secrets
-import re
-from urllib.parse import urlsplit, parse_qs
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import edge_tts
 import requests
@@ -30,12 +27,6 @@ logger = logging.getLogger("TuUyenWebServer")
 # Bảo vệ bot_brain.AI_MODEL, phiên chat và Supabase dùng chung.
 # GET /healthz vẫn được trả lời độc lập khi một lượt chat đang chạy.
 BRAIN_LOCK = threading.Lock()
-TTS_LOCK = threading.Lock()  # Limit external synthesis to one request at a time.
-VOICE_JOBS_LOCK = threading.Lock()
-VOICE_JOBS = {}  # volatile short-lived chunks: no persistence or personal data in logs
-VOICE_JOB_TTL = 900  # 15 minutes
-VOICE_JOB_LIMIT = 5
-
 
 FISH_API_KEY = os.getenv("FISH_AUDIO_API_KEY", "").strip()
 FISH_VOICE_ID = os.getenv("FISH_VOICE_ID", "7788e6c42a1a4e169935b417ff65a453").strip()
@@ -89,72 +80,6 @@ async def generate_free_voice(text: str, voice_key: str) -> str:
                 pass
 
 
-
-def split_voice_text(text):
-    """Short initial utterance, then natural longer segments. Preserves all words."""
-    cleaned = text.replace("*", "").replace("#", "").replace("`", "").strip()
-    sentences = re.split(r"(?<=[.!?。！？;；])\s+|\n+", cleaned)
-    parts = []
-    for sentence in sentences:
-        words = sentence.split()
-        current = ""
-        for word in words:
-            limit = 115 if not parts else 260
-            if current and len(current) + 1 + len(word) > limit:
-                parts.append(current)
-                current = word
-            else:
-                current = f"{current} {word}" if current else word
-        if current:
-            parts.append(current)
-    # Small introductory fragments should be spoken together if space allows.
-    packed = []
-    for part in parts:
-        limit = 115 if not packed else 260
-        if packed and len(packed[-1]) + 1 + len(part) <= (115 if len(packed) == 1 else 260):
-            packed[-1] += " " + part
-        else:
-            packed.append(part)
-    if len(packed) > 12:
-        packed = packed[:11] + [" ".join(packed[11:])]
-    return packed or [cleaned]
-
-
-def create_voice_job(chunks, voice):
-    token = secrets.token_urlsafe(24)
-    now = time.monotonic()
-    with VOICE_JOBS_LOCK:
-        for old_key, value in list(VOICE_JOBS.items()):
-            if now - value["created"] > VOICE_JOB_TTL:
-                del VOICE_JOBS[old_key]
-        while len(VOICE_JOBS) >= VOICE_JOB_LIMIT:
-            del VOICE_JOBS[min(VOICE_JOBS, key=lambda k: VOICE_JOBS[k]["created"])]
-        VOICE_JOBS[token] = {"created": now, "chunks": chunks, "voice": voice}
-    return token
-
-
-def get_voice_chunk(token, idx):
-    with VOICE_JOBS_LOCK:
-        job = VOICE_JOBS.get(token)
-        if not job or time.monotonic() - job["created"] > VOICE_JOB_TTL:
-            VOICE_JOBS.pop(token, None)
-            return None
-        if idx < 1 or idx >= len(job["chunks"]):
-            return None
-        return job["chunks"][idx], job["voice"]
-
-
-def make_voice_audio(text, voice):
-    with TTS_LOCK:
-        if voice == "vip_taothao":
-            fish_audio = generate_fish_audio(text)
-            if fish_audio:
-                return fish_audio
-        fallback = voice if voice in FREE_VOICES else "nam_minh"
-        # asyncio.run() makes and closes its own loop in the request thread.
-        return asyncio.run(generate_free_voice(text, fallback))
-
-
 class RobotWebHandler(SimpleHTTPRequestHandler):
     def send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -179,31 +104,6 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path.split("?", 1)[0] == "/api/voice_chunk":
-            params = parse_qs(urlsplit(self.path).query)
-            token = params.get("job", [""])[0]
-            try:
-                idx = int(params.get("n", ["-1"])[0])
-            except ValueError:
-                idx = -1
-            item = get_voice_chunk(token, idx)
-            if item is None:
-                self.send_rpg_json({"ok": False, "error": "Voice segment expired or invalid"}, 404)
-                return
-            text, voice = item
-            started = time.perf_counter()
-            logger.info("[TY-DIAG] CHUNK_START index=%d", idx)
-            try:
-                audio = make_voice_audio(text, voice)
-                if not audio:
-                    raise RuntimeError("Voice synthesis returned empty content")
-                logger.info("[TY-DIAG] CHUNK_DONE index=%d duration=%.2fs", idx, time.perf_counter() - started)
-                self.send_rpg_json({"ok": True, "audio": audio})
-            except Exception:
-                logger.exception("[TY-DIAG] CHUNK_FAILED index=%d", idx)
-                self.send_rpg_json({"ok": False, "error": "Voice temporarily unavailable"}, 503)
-            return
-
         if self.path.split("?", 1)[0] == "/healthz":
             self.send_rpg_json({"ok": True, "service": "tuuyen-robot"})
             return
@@ -272,7 +172,6 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 return
 
             BRAIN_LOCK.acquire()
-            brain_locked = True
             try:
                 bot_brain.AI_MODEL = selected_model
                 logger.info("🎙️ Nhận câu hỏi model=%s length=%s", selected_model, len(user_msg))
@@ -323,22 +222,27 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 bot_brain.save_message(conv_id, "user", user_msg)
                 bot_brain.save_message(conv_id, "assistant", reply_text)
 
-                # Keep serialized brain/Supabase access, but do not hold its lock during TTS.
-                BRAIN_LOCK.release()
-                brain_locked = False
-
-                # V3.8.5: synthesize only the short first part before HTTP response.
-                chunks = split_voice_text(reply_text)
-                voice_job = create_voice_job(chunks, selected_voice) if len(chunks) > 1 else None
+                # 7. Sinh âm thanh theo chuẩn ổn định của V3.4
                 tts_start = time.perf_counter()
-                logger.info("[TY-DIAG] TTS_START voice=%s first_chars=%d chunks=%d", selected_voice, len(chunks[0]), len(chunks))
-                audio_b64 = make_voice_audio(chunks[0], selected_voice)
+                logger.info("[TY-DIAG] TTS_START voice=%s", selected_voice)
+                audio_b64 = None
+                if selected_voice == "vip_taothao":
+                    audio_b64 = generate_fish_audio(reply_text)
+
+                if not audio_b64:
+                    voice_fallback = selected_voice if selected_voice in FREE_VOICES else "nam_minh"
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        audio_b64 = loop.run_until_complete(generate_free_voice(reply_text, voice_fallback))
+                    finally:
+                        loop.close()
+
                 tts_elapsed = time.perf_counter() - tts_start
                 logger.info("[TY-DIAG] TTS_DONE duration=%.2fs audio_ok=%s", tts_elapsed, bool(audio_b64))
 
                 # 8. Phản hồi về điện thoại
-                resp_bytes = json.dumps({"reply": reply_text, "audio": audio_b64,
-                                         "voice_job": voice_job, "voice_chunks": len(chunks)}, ensure_ascii=False).encode("utf-8")
+                resp_bytes = json.dumps({"reply": reply_text, "audio": audio_b64}, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(resp_bytes)))
@@ -356,8 +260,7 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(err_bytes)
             finally:
-                if brain_locked:
-                    BRAIN_LOCK.release()
+                BRAIN_LOCK.release()
 
 
 def run(port=None):
@@ -365,7 +268,7 @@ def run(port=None):
         port = int(os.environ.get("PORT", 8000))
     server_address = ("0.0.0.0", port)
     httpd = ThreadingHTTPServer(server_address, RobotWebHandler)
-    logger.info(f"🚀 MẶT ROBOT TỬ UYÊN V3.8.5 (FAST VOICE + THREADED HTTP + DIAG) LIVE TẠI: {port}")
+    logger.info(f"🚀 MẶT ROBOT TỬ UYÊN V3.8.4 (THREADED HTTP + SERIALIZED BRAIN + DIAG) LIVE TẠI: {port}")
     httpd.serve_forever()
 
 
