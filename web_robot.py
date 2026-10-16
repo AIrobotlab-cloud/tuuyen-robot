@@ -38,6 +38,34 @@ FREE_VOICES = {
 
 DEFAULT_MODEL = "gpt-4o-mini"
 
+# ElevenLabs: API key only on Render server. Voice ID can be changed later.
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "").strip()
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb").strip()
+
+
+def generate_elevenlabs_audio(text: str):
+    """Generate one MP3 (no chunking); returns base64 or None on failure."""
+    if not ELEVENLABS_API_KEY:
+        logger.warning("[TY-ELEVEN] NOT_CONFIGURED")
+        return None
+    clean_text = text.replace("*", "").replace("#", "").replace("`", "").strip()
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+    headers = {"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"}
+    payload = {"text": clean_text, "model_id": "eleven_flash_v2_5"}
+    start = time.perf_counter()
+    try:
+        res = requests.post(url, headers=headers, params={"output_format": "mp3_44100_128"},
+                            json=payload, timeout=(5, 20))
+        elapsed = time.perf_counter() - start
+        if res.status_code == 200 and res.content and res.headers.get("Content-Type", "").lower().startswith("audio/"):
+            logger.info("[TY-ELEVEN] OK duration=%.2fs bytes=%d", elapsed, len(res.content))
+            return base64.b64encode(res.content).decode("utf-8")
+        logger.warning("[TY-ELEVEN] FAIL http=%d duration=%.2fs", res.status_code, elapsed)
+    except requests.RequestException as exc:
+        logger.warning("[TY-ELEVEN] REQUEST_FAILED type=%s duration=%.2fs", type(exc).__name__, time.perf_counter() - start)
+    return None
+
+
 
 def generate_fish_audio(text: str) -> str:
     if not FISH_API_KEY:
@@ -229,7 +257,11 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 if selected_voice == "vip_taothao":
                     audio_b64 = generate_fish_audio(reply_text)
 
-                if not audio_b64:
+                if selected_voice == "elevenlabs_test":
+                    audio_b64 = generate_elevenlabs_audio(reply_text)
+
+                # Trial mode: never silently fall back to slow Edge TTS.
+                if not audio_b64 and selected_voice != "elevenlabs_test":
                     voice_fallback = selected_voice if selected_voice in FREE_VOICES else "nam_minh"
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
