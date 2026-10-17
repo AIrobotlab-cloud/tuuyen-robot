@@ -108,6 +108,111 @@ async def generate_free_voice(text: str, voice_key: str) -> str:
                 pass
 
 
+# TY-MEMORY-INTEGRITY 4B: opt-in, bounded Android draft capture.
+# Default OFF: /api/chat currently does not authenticate callers.
+import queue
+
+MEMORY_CAPTURE_ENABLED = os.getenv("TY_ANDROID_DRAFT_CAPTURE", "0").strip() == "1"
+MEMORY_DRAFT_QUEUE = queue.Queue(maxsize=3)
+
+
+def _memory_draft_worker():
+    """Separate background worker: no BRAIN_LOCK, no effect on web chat/TTS."""
+    from supabase import create_client
+    database = None
+    while True:
+        instance_id, user_text = MEMORY_DRAFT_QUEUE.get()
+        try:
+            if database is None:
+                database = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+            instruction = (
+                "Bạn là bộ trích xuất KÝ ỨC NHÁP, KHÔNG xác minh sự thật. "
+                "Đầu vào là một câu đơn lẻ; không suy đoán lịch sử hay ngữ cảnh bị thiếu. "
+                "Chỉ giữ thông tin có ích lâu dài về dự án hoặc sở thích. "
+                "Nếu chỉ chào hỏi, đùa vui thoáng qua, nội dung mơ hồ hoặc câu hỏi: has_memory=false. "
+                "Nếu có từ ngữ giả định, đang cân nhắc, dự định, thử nghiệm: phải ghi rõ "
+                "đây là giả định/dự định/phép thử trong content; tuyệt đối không đổi thành đã làm. "
+                "Thông báo đã mua, đã làm từ một câu đơn lẻ chỉ được ghi là 'người dùng nói rằng', "
+                "không phải sự kiện được kiểm chứng. "
+                "Không tự thêm số liệu, hành động, kết quả hoặc bằng chứng. "
+                "Trả về duy nhất một JSON object: "
+                '{"has_memory":false,"type":"project","content":""} hoặc '
+                '{"has_memory":true,"type":"project|fact|preference|hardware_safety",'
+                '"content":"ghi chú ngắn có ngữ cảnh"}. '
+                "Độ dài content tối đa 280 ký tự."
+            )
+            payload = {
+                "model": DEFAULT_MODEL,
+                "temperature": 0,
+                "messages": [
+                    {"role": "system", "content": instruction},
+                    {"role": "user", "content": user_text},
+                ],
+            }
+            endpoint = bot_brain.SHOPAIKEY_BASE_URL.rstrip("/") + "/chat/completions"
+            response = requests.post(
+                endpoint,
+                headers={"Authorization": "Bearer " + bot_brain.SHOPAIKEY_API_KEY,
+                         "Content-Type": "application/json"},
+                json=payload, timeout=(5, 20),
+            )
+            response.raise_for_status()
+            raw = response.json()["choices"][0]["message"]["content"].strip()
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            value = json.loads(raw)
+            if not isinstance(value, dict) or value.get("has_memory") is not True:
+                continue
+            category = value.get("type")
+            content = value.get("content")
+            if category not in {"project", "fact", "preference", "hardware_safety"}:
+                continue
+            if not isinstance(content, str) or not 10 <= len(content.strip()) <= 280:
+                continue
+            content = content.strip()
+            # Best-effort identical draft deduplication for this robot.
+            recent = (database.table("memories")
+                      .select("content")
+                      .eq("instance_id", instance_id)
+                      .eq("context_source", "Tự học nháp qua Android - TY-4B")
+                      .order("created_at", desc=True).limit(30).execute())
+            if any(m.get("content", "").casefold() == content.casefold()
+                   for m in (recent.data or [])):
+                continue
+            database.table("memories").insert({
+                "instance_id": instance_id,
+                "memory_type": category,
+                "content": content,
+                "context_source": "Tự học nháp qua Android - TY-4B",
+                "confidence_score": 0.50,
+                "is_verified": False,
+            }).execute()
+            logger.info("[TY-MEM-4B] DRAFT_SAVED type=%s", category)
+        except Exception as exc:
+            # No user text or secrets in logs. A failed extraction must not affect chat.
+            logger.warning("[TY-MEM-4B] DRAFT_FAILED class=%s", type(exc).__name__)
+        finally:
+            MEMORY_DRAFT_QUEUE.task_done()
+
+
+def _enqueue_memory_draft(instance_id, user_text):
+    if not MEMORY_CAPTURE_ENABLED or len(user_text.strip()) < 10 or len(user_text) > 1500:
+        return
+    try:
+        MEMORY_DRAFT_QUEUE.put_nowait((instance_id, user_text))
+    except queue.Full:
+        logger.info("[TY-MEM-4B] QUEUE_FULL_SKIPPED")
+
+
+if MEMORY_CAPTURE_ENABLED:
+    threading.Thread(target=_memory_draft_worker,
+                     name="tuuyen-memory-drafts", daemon=True).start()
+    logger.warning("[TY-MEM-4B] ENABLED: /api/chat lacks authentication; use only for controlled testing")
+else:
+    logger.info("[TY-MEM-4B] DISABLED_BY_DEFAULT")
+
+
+
 class RobotWebHandler(SimpleHTTPRequestHandler):
     def send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -199,6 +304,8 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 self.wfile.write(resp_bytes)
                 return
 
+            capture_after_reply = False
+            memory_instance_id = None
             BRAIN_LOCK.acquire()
             try:
                 bot_brain.AI_MODEL = selected_model
@@ -350,6 +457,8 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 self.send_cors_headers()
                 self.end_headers()
                 self.wfile.write(resp_bytes)
+                capture_after_reply = True
+                memory_instance_id = instance_id
 
             except Exception as e:
                 logger.error(f"Lỗi: {e}")
@@ -362,6 +471,9 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 self.wfile.write(err_bytes)
             finally:
                 BRAIN_LOCK.release()
+                # Schedule only after sending chat response and releasing the brain lock.
+                if capture_after_reply and memory_instance_id is not None:
+                    _enqueue_memory_draft(memory_instance_id, user_msg)
 
 
 def run(port=None):
