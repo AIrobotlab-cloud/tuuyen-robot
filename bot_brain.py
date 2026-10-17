@@ -222,43 +222,60 @@ async def auto_extract_and_save_memory(instance_id: str, user_text: str):
         if len(user_text.strip()) < 10 or user_text.startswith("/"):
             return
 
+        # TY-MEMORY-INTEGRITY V1.0 - Giai doan 4A: auto-learning is pending,
+        # NEVER founder-verified. Preserve test/joke/hypothetical context.
         extraction_prompt = [
             {
                 "role": "system",
                 "content": (
-                    "Bạn là bộ lọc ký ức ngầm của robot Tử Uyên. Phân tích câu nói của người dùng "
-                    "để trích xuất dữ kiện quan trọng về người dùng, dự án, hoặc sở thích văn phong.\n"
-                    "- Nếu người dùng góp ý về văn phong: trích xuất thành ký ức loại 'preference'.\n"
-                    "- Nếu người dùng chia sẻ về bản thân, công việc, dự án hoặc quy tắc an toàn: trích xuất thành 'fact' hoặc 'hardware_safety'.\n"
-                    "- Nếu chỉ là câu chào hỏi, than vãn hoặc không có dữ kiện mới: trả về 'NONE'.\n\n"
-                    "Trả về đúng định dạng JSON:\n"
-                    "{\"has_memory\": true/false, \"type\": \"fact\"|\"preference\"|\"hardware_safety\"|\"project\", \"content\": \"nội dung ký ức\"}"
+                    "Bạn chỉ là bộ trích xuất KÝ ỨC NHÁP, không có quyền xác minh sự thật. "
+                    "Chỉ trích xuất thông tin có khả năng hữu ích lâu dài, không lưu chào hỏi, "
+                    "cảm xúc nhất thời hoặc lời nói đùa không đáng nhớ. "
+                    "Phân biệt rõ phát biểu đã xảy ra, dự định, giả định, phép kiểm thử, lời đùa và quyết định. "
+                    "Nếu người dùng nói đã mua thiết bị trong một phép thử, KHÔNG viết thành đã mua thật. "
+                    "Nếu chưa rõ ngữ cảnh, ghi rõ 'chưa xác minh' trong nội dung. "
+                    "Không tự tạo thêm tình tiết, không suy đoán hành động thực tế. "
+                    "Với phép thử có bài học quan trọng, có thể lưu như bài học về cuộc thử nghiệm, "
+                    "không lưu như hành vi thực tế của người dùng. "
+                    "Trả về DUY NHẤT JSON hợp lệ với các khóa: "
+                    "has_memory (boolean), type (fact|preference|hardware_safety|project), "
+                    "content (string). Nếu không có ký ức phù hợp, dùng "
+                    "{\"has_memory\":false,\"type\":\"fact\",\"content\":\"\"}."
                 )
             },
-            {"role": "user", "content": f"Câu nói: \"{user_text}\""}
+            {"role": "user", "content": "Phát biểu cần phân loại (không tự xác minh):\n" + user_text}
         ]
 
         raw_res = call_ai_model(extraction_prompt)
         clean_json = raw_res.strip()
         if "```json" in clean_json:
-            clean_json = clean_json.split("```json")[1].split("```")[0].strip()
+            clean_json = clean_json.split("```json", 1)[1].split("```", 1)[0].strip()
         elif "```" in clean_json:
-            clean_json = clean_json.split("```")[1].split("```")[0].strip()
+            clean_json = clean_json.split("```", 1)[1].split("```", 1)[0].strip()
 
         data = json.loads(clean_json)
-        if data.get("has_memory") and data.get("content"):
-            mem_type = data.get("type", "fact")
-            mem_content = data.get("content").strip()
+        if not isinstance(data, dict) or data.get("has_memory") is not True:
+            return
 
-            supabase.table("memories").insert({
-                "instance_id": instance_id,
-                "memory_type": mem_type,
-                "content": mem_content,
-                "context_source": "Tự học ngầm qua hội thoại tự nhiên",
-                "confidence_score": 0.85,
-                "is_verified": True
-            }).execute()
-            logger.info(f"✨ [TỰ HỌC THÀNH CÔNG] Đã lưu ký ức: [{mem_type}] {mem_content}")
+        mem_type = data.get("type")
+        mem_content = data.get("content")
+        if mem_type not in {"fact", "preference", "hardware_safety", "project"}:
+            return
+        if not isinstance(mem_content, str) or not mem_content.strip():
+            return
+        mem_content = mem_content.strip()[:1500]
+
+        # The existing schema defaults is_verified to false. Specify it to
+        # avoid accidental promotion if defaults/triggers change later.
+        supabase.table("memories").insert({
+            "instance_id": instance_id,
+            "memory_type": mem_type,
+            "content": mem_content,
+            "context_source": "Tự học ngầm - chờ xác minh (TY-MI V1.0)",
+            "confidence_score": 0.50,
+            "is_verified": False
+        }).execute()
+        logger.info("[TY-MEMORY] Saved unverified draft type=%s", mem_type)
 
     except Exception as e:
         logger.debug(f"Bỏ qua tự học ngầm: {e}")
