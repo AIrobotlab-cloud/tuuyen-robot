@@ -239,7 +239,58 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                     "- Phong thái điềm tĩnh, sắc sảo, gần gũi; không diễn thuyết, không kịch hóa quá mức."
                 )
 
-                full_prompt = base_system_prompt + depth_rule + "\n\n" + memories_text + knowledge_context
+                # TY-PROJECT-TRUTH + NATURAL V1.1: chỉ thêm ngữ cảnh dự án khi liên quan.
+                # Không viết lại Character Profile, DE Rules, memories hoặc dữ liệu Supabase.
+                project_terms = (
+                    "tử uyên", "ai robot lab", "dự án", "nhà đầu tư", "gọi vốn",
+                    "bản v2", "bản v1", "robot của ta", "robot của chúng ta",
+                    "giọng nội tại", "on-device", "bộ nhớ độc lập", "mô hình b",
+                    "lợi nhuận", "bom", "sản xuất", "triển khai", "đã hoàn thành"
+                )
+                project_question = any(term in user_msg.lower() for term in project_terms)
+                project_truth = ""
+                if project_question:
+                    project_truth = (
+                        "\n\n=== HIỆN TRẠNG DỰ ÁN (tham chiếu 17/10/2026; không phải nhân cách) ===\n"
+                        "Định hướng: TUYUEN-001 là AI instance có danh tính và ký ức riêng, "
+                        "vai trò quân sư kiêm kỹ sư trưởng; Android là thân thử nghiệm. "
+                        "Kiến trúc đã được mô tả: Android/Chrome → Render/web_robot.py → "
+                        "bot_brain.py/LLM qua ShopAIKey; Supabase lưu dữ liệu. "
+                        "Người sáng lập xác nhận bản tối ưu lời thoại đã LIVE và Android trả lời. "
+                        "Ngày 17/10 đã nạp 8 tài liệu Robotics Foundation, kiểm tra SQL tìm đúng "
+                        "3/3 tài liệu đứng đầu; chưa xác minh đóng góp thực tế của RAG trong mỗi lời đáp. "
+                        "Người sáng lập báo cáo ElevenLabs có tiếng; chưa nghiệm thu độ trễ/độ bền. "
+                        "CHƯA XÁC MINH: robot vật lý đã lắp ráp; On-Device TTS hoạt động; "
+                        "BOM 3,3 triệu/2,32 triệu là chi phí thực; biên lợi nhuận 55–60%; "
+                        "tái sử dụng 95% mã; TTS 0,2 giây; tiến độ 1–3 tháng; thương mại hóa. "
+                        "Web search có mã trong bot_brain.py nhưng luồng Android /api/chat "
+                        "trong bản kiểm tra chưa gọi chức năng tìm kiếm. "
+                        "Nếu tài liệu cũ mô tả một mục tiêu như sự thật đã nghiệm thu, "
+                        "phải gọi đúng đó là dự kiến/chưa xác minh. "
+                        "Không suy diễn không có bằng chứng thành đã hoàn thành.\n"
+                    )
+
+                # Quy tắc ứng xử của lượt hội thoại, không sửa các 16 rules trong Supabase.
+                evidence_and_speech = (
+                    "\n\nHƯỚNG DẪN CUỐI CHO LƯỢT TRẢ LỜI: "
+                    "Bằng chứng được phân biệt: đã xác minh; người sáng lập xác nhận; "
+                    "kế hoạch/ước tính; chưa rõ. Không biến bản thiết kế, ý định, giá dự toán "
+                    "hoặc nội dung RAG thành dữ kiện triển khai thực tế. "
+                    "Khi dữ liệu xung đột, nói rõ giới hạn chứ không bịa cách dung hòa. "
+                    "Mặc định trò chuyện như người quân sư ngồi đối diện: "
+                    "đi thẳng vào nhận định, giải thích ngắn một hai căn cứ, "
+                    "đề xuất bước kế tiếp khi hữu ích; thường 2–5 câu. "
+                    "KHÔNG tự tạo tiêu đề Markdown, đường kẻ, danh sách, tiểu mục "
+                    "hoặc đoạn 'Kết luận' trừ khi người dùng thật sự yêu cầu báo cáo, "
+                    "các bước hay so sánh có cấu trúc. "
+                    "Không lặp lại câu hỏi, không mở đầu sáo rỗng, không kết lời khuôn mẫu. "
+                    "Với câu hỏi phức tạp vẫn được dài hơn để bảo đảm sự đúng đắn và an toàn. "
+                    "Giữ nguyên xưng hô, bản sắc và sự độc lập của Tử Uyên."
+                )
+                full_prompt = (
+                    base_system_prompt + depth_rule + "\n\n" + memories_text
+                    + knowledge_context + project_truth + evidence_and_speech
+                )
 
                 # 4. Dùng mã phiên sạch 888999 và lọc bỏ hoàn toàn các tin nhắn rỗng cũ
                 conv_id = bot_brain.get_or_create_conversation(instance_id, 888999)
