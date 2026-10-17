@@ -217,27 +217,16 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 if any(k in user_msg.lower() for k in triggers) or len(user_msg.split()) >= 4:
                     knowledge_context = bot_brain.retrieve_knowledge(user_msg, limit=2)
 
-                # 3. Quy tắc độ dài co giãn tự nhiên (DE-R03)
-                # TY-DIALOGUE-NATURAL V1.0: lớp thể hiện lời nói, không sửa Profile/DE Rules trong DB.
-                # Ưu tiên nội dung đúng và an toàn; không biến độ dài thành mục tiêu tự thân.
-                depth_rule = (
-                    "\n\nHƯỚNG DẪN THỂ HIỆN HỘI THOẠI TỰ NHIÊN TRÊN ROBOT "
-                    "(bổ sung cách diễn đạt; không thay thế Character Profile và DE-R01–DE-R16):\n"
-                    "- Giữ nguyên danh tính, xưng hô, khí chất và những nguyên tắc cốt lõi đã được quy định.\n"
-                    "- Nói trực tiếp điều quan trọng nhất trước; không nhắc lại toàn bộ câu hỏi, "
-                    "không mở đầu bằng câu 'ta sẽ phân tích' hay lời tán dương sáo rỗng.\n"
-                    "- Ưu tiên lời nói tự nhiên giữa hai người: câu rõ, đoạn ngắn, tránh tiêu đề, "
-                    "Markdown, đánh số và danh sách dài nếu người dùng không yêu cầu.\n"
-                    "- Với câu xã giao hoặc tâm sự: thường 1–3 câu, ấm áp và chân thành.\n"
-                    "- Với câu hỏi kỹ thuật hoặc chiến lược: thường 3–6 câu; nêu nhận định, "
-                    "lý do chính và một lưu ý/điều kiện quan trọng. Được dài hơn nếu cần "
-                    "để trả lời chính xác, rõ ràng hoặc bảo đảm an toàn.\n"
-                    "- Có chính kiến nhưng phân biệt dữ kiện đã xác minh, suy luận và điều chưa biết. "
-                    "Không bịa thông số, nguồn trích dẫn hay khả năng đang hoạt động.\n"
-                    "- Chỉ hỏi thêm khi thiếu thông tin thiết yếu; tránh kết thúc mọi lượt bằng lời mời "
-                    "trợ giúp rập khuôn. Không cắt bỏ cảnh báo an toàn thiết yếu chỉ để nói ngắn.\n"
-                    "- Phong thái điềm tĩnh, sắc sảo, gần gũi; không diễn thuyết, không kịch hóa quá mức."
+                # TY-DIALOGUE V1.2: chỉ điều phối cách trình bày ở web layer.
+                # DE-R03 gốc vẫn thuộc bot_brain.get_instance_context(); không chồng lớp nữa.
+                normalized_question = user_msg.casefold()
+                deep_requests = (
+                    "phân tích chi tiết", "phân tích sâu", "báo cáo", "lập bảng",
+                    "bảng so sánh", "so sánh chi tiết", "liệt kê", "từng bước",
+                    "hướng dẫn từng bước", "trình bày đầy đủ", "giải thích kỹ",
+                    "chuyên sâu", "chi tiết các", "viết tài liệu", "soạn tài liệu"
                 )
+                deep_mode = any(term in normalized_question for term in deep_requests)
 
                 # TY-PROJECT-TRUTH + NATURAL V1.1: chỉ thêm ngữ cảnh dự án khi liên quan.
                 # Không viết lại Character Profile, DE Rules, memories hoặc dữ liệu Supabase.
@@ -270,31 +259,46 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                         "Không suy diễn không có bằng chứng thành đã hoàn thành.\n"
                     )
 
-                # Quy tắc ứng xử của lượt hội thoại, không sửa các 16 rules trong Supabase.
-                evidence_and_speech = (
-                    "\n\nHƯỚNG DẪN CUỐI CHO LƯỢT TRẢ LỜI: "
-                    "Bằng chứng được phân biệt: đã xác minh; người sáng lập xác nhận; "
-                    "kế hoạch/ước tính; chưa rõ. Không biến bản thiết kế, ý định, giá dự toán "
-                    "hoặc nội dung RAG thành dữ kiện triển khai thực tế. "
-                    "Khi dữ liệu xung đột, nói rõ giới hạn chứ không bịa cách dung hòa. "
-                    "Mặc định trò chuyện như người quân sư ngồi đối diện: "
-                    "đi thẳng vào nhận định, giải thích ngắn một hai căn cứ, "
-                    "đề xuất bước kế tiếp khi hữu ích; thường 2–5 câu. "
-                    "KHÔNG tự tạo tiêu đề Markdown, đường kẻ, danh sách, tiểu mục "
-                    "hoặc đoạn 'Kết luận' trừ khi người dùng thật sự yêu cầu báo cáo, "
-                    "các bước hay so sánh có cấu trúc. "
-                    "Không lặp lại câu hỏi, không mở đầu sáo rỗng, không kết lời khuôn mẫu. "
-                    "Với câu hỏi phức tạp vẫn được dài hơn để bảo đảm sự đúng đắn và an toàn. "
-                    "Giữ nguyên xưng hô, bản sắc và sự độc lập của Tử Uyên."
+                # Chỉ MỘT hướng dẫn biểu đạt tại cuối system prompt, không trộn thêm DE-R03.
+                if deep_mode:
+                    speech_policy = (
+                        "\n\n=== CÁCH TRẢ LỜI LƯỢT NÀY: PHÂN TÍCH CHI TIẾT ===\n"
+                        "Người dùng đã yêu cầu nội dung chi tiết: được dùng mục, bảng hoặc các bước "
+                        "khi hữu ích; vẫn đi thẳng vào câu trả lời, tránh mỹ từ và lời kết rập khuôn. "
+                        "Giữ chính xác kỹ thuật, điều kiện, an toàn và bằng chứng."
+                    )
+                else:
+                    speech_policy = (
+                        "\n\n=== CÁCH TRẢ LỜI LƯỢT NÀY: HỘI THOẠI TRỰC TIẾP ===\n"
+                        "Đây là một lượt TRÒ CHUYỆN, không phải yêu cầu viết báo cáo. "
+                        "Trả lời trực tiếp bằng lời nói tự nhiên, thường 2–4 câu, một hoặc hai đoạn ngắn. "
+                        "Không tạo tiêu đề, dấu phân cách, danh sách đánh số/gạch đầu dòng, "
+                        "mở đầu 'ta sẽ phân tích', kết luận hình thức hay lời hứa động viên sáo rỗng. "
+                        "Một nhận định chính, căn cứ trọng yếu, một gợi ý khi hữu ích. "
+                        "Giảm ẩn dụ chiến trường, tránh diễn thuyết. "
+                        "Nếu câu hỏi liên quan cảm xúc, trước tiên đáp lại con người thay vì lập kế hoạch dự án. "
+                        "Nếu câu hỏi kỹ thuật cần giải thích thêm để đúng hoặc an toàn, có thể dài hơn."
+                    )
+                truth_policy = (
+                    "\n\n=== ĐỘ TIN CẬY THÔNG TIN ===\n"
+                    "Không biến kế hoạch, BOM ước tính, thông số mục tiêu hoặc tài liệu RAG "
+                    "thành kết quả đã nghiệm thu. Phân biệt dữ kiện được kiểm chứng, "
+                    "người sáng lập xác nhận, giả thuyết và điều chưa rõ. "
+                    "Khi nguồn mâu thuẫn, nói ngắn gọn điều chưa đủ cơ sở. "
+                    "Giữ nguyên danh tính, xưng hô, tính cách và DE Rules trong Supabase."
                 )
                 full_prompt = (
-                    base_system_prompt + depth_rule + "\n\n" + memories_text
-                    + knowledge_context + project_truth + evidence_and_speech
+                    base_system_prompt + "\n\n" + memories_text + knowledge_context
+                    + project_truth + truth_policy + speech_policy
                 )
 
                 # 4. Dùng mã phiên sạch 888999 và lọc bỏ hoàn toàn các tin nhắn rỗng cũ
                 conv_id = bot_brain.get_or_create_conversation(instance_id, 888999)
-                raw_history = bot_brain.get_recent_messages(conv_id, limit=6)
+                # Conversation: chỉ giữ lượt trao đổi gần nhất để giảm bắt chước
+                # các bài báo cáo dài trước đó. Deep Analysis giữ 6 tin như V1.1.
+                raw_history = bot_brain.get_recent_messages(
+                    conv_id, limit=6 if deep_mode else 2
+                )
                 clean_history = [
                     m for m in raw_history
                     if m.get("content") and len(m["content"].strip()) >= 2
