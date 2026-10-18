@@ -372,6 +372,8 @@ TG_WEBHOOK_ENABLED = bool(
     and TG_FOUNDER_ID.isdecimal() and int(TG_FOUNDER_ID) > 0
 )
 TG_WEBHOOK_PATH = "/api/telegram/webhook"
+# Default to polling to bypass Telegram->Render 404. Optional: TY_TELEGRAM_MODE=webhook.
+TG_MODE = os.getenv("TY_TELEGRAM_MODE", "polling").strip().lower()
 # Telegram accepts alphanumeric + _ and - for secret_token; keep it server-only.
 TG_WEBHOOK_SECRET = hashlib.sha256(("ty-4f-hook:" + TG_TOKEN).encode()).hexdigest() if TG_TOKEN else ""
 TG_API = "https://api.telegram.org/bot" + TG_TOKEN + "/" if TG_TOKEN else ""
@@ -489,6 +491,42 @@ def _telegram_register_webhook():
             return
         time.sleep(3)
     logger.warning("[TY-MEM-4F] WEBHOOK_REGISTRATION_FAILED")
+
+
+
+def _telegram_poll_worker():
+    """Telegram getUpdates worker, independent of the HTTP server and chat pipeline."""
+    if not TG_WEBHOOK_ENABLED:
+        logger.info("[TY-MEM-4F] POLLING_DISABLED_CONFIG")
+        return
+    # Telegram forbids getUpdates while a webhook exists. Discard stale /start
+    # messages and callbacks from the failed webhook period; do not replay approvals.
+    while True:
+        deleted = _telegram_call("deleteWebhook", {"drop_pending_updates": True}, timeout=8)
+        if deleted is True:
+            logger.info("[TY-MEM-4F] POLLING_READY")
+            break
+        logger.warning("[TY-MEM-4F] POLLING_DELETE_WEBHOOK_RETRY")
+        time.sleep(15)
+
+    offset = None
+    while True:
+        payload = {"timeout": 15, "limit": 20, "allowed_updates": ["message", "callback_query"]}
+        if offset is not None:
+            payload["offset"] = offset
+        updates = _telegram_call("getUpdates", payload, timeout=22)
+        if not isinstance(updates, list):
+            logger.warning("[TY-MEM-4F] POLLING_FETCH_RETRY")
+            time.sleep(8)
+            continue
+        for update in updates:
+            if not isinstance(update, dict) or not isinstance(update.get("update_id"), int):
+                continue
+            offset = update["update_id"] + 1
+            try:
+                _telegram_process_update(update)
+            except Exception as exc:
+                logger.warning("[TY-MEM-4F] POLLING_UPDATE_FAILED class=%s", type(exc).__name__)
 
 
 def _supabase_auth_headers(token=None):
@@ -658,7 +696,7 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == TG_WEBHOOK_PATH:
-            if not TG_WEBHOOK_ENABLED:
+            if not TG_WEBHOOK_ENABLED or TG_MODE != "webhook":
                 self._deny(404, "Not found")
                 return
             supplied = self.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
@@ -955,7 +993,13 @@ def run(port=None):
         port = int(os.environ.get("PORT", 8000))
     server_address = ("0.0.0.0", port)
     httpd = ThreadingHTTPServer(server_address, RobotWebHandler)
-    threading.Thread(target=_telegram_register_webhook, name="ty-telegram-webhook", daemon=True).start()
+    # Bind the HTTP port BEFORE starting any outbound Telegram network calls.
+    if TG_MODE == "polling":
+        threading.Thread(target=_telegram_poll_worker, name="ty-telegram-polling", daemon=True).start()
+    elif TG_MODE == "webhook":
+        threading.Thread(target=_telegram_register_webhook, name="ty-telegram-webhook", daemon=True).start()
+    else:
+        logger.warning("[TY-MEM-4F] UNKNOWN_MODE")
     logger.info(f"🚀 MẶT ROBOT TỬ UYÊN V3.8.4 (THREADED HTTP + SERIALIZED BRAIN + DIAG) LIVE TẠI: {port}")
     httpd.serve_forever()
 
