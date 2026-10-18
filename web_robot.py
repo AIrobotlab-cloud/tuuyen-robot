@@ -207,7 +207,7 @@ def _enqueue_memory_draft(instance_id, user_text):
 if MEMORY_CAPTURE_ENABLED:
     threading.Thread(target=_memory_draft_worker,
                      name="tuuyen-memory-drafts", daemon=True).start()
-    logger.warning("[TY-MEM-4B] ENABLED: /api/chat lacks authentication; use only for controlled testing")
+    logger.info("[TY-MEM-4E1] DRAFT_CAPTURE_ENABLED auth_enforced=%s", AUTH_ENFORCED if "AUTH_ENFORCED" in globals() else "not_initialized")
 else:
     logger.info("[TY-MEM-4B] DISABLED_BY_DEFAULT")
 
@@ -747,28 +747,37 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 bot_brain.save_message(conv_id, "user", user_msg)
                 bot_brain.save_message(conv_id, "assistant", reply_text)
 
-                # 7. Sinh âm thanh theo chuẩn ổn định của V3.4
+                # TY-MEMORY 4E.1: ghi nhớ phụ thuộc lưu hội thoại, KHÔNG phụ thuộc TTS.
+                # Hàng đợi sẽ được kích hoạt trong finally sau khi giải phóng BRAIN_LOCK.
+                capture_after_reply = True
+                memory_instance_id = instance_id
+
+                # 7. TTS best-effort: lỗi giọng không làm mất chữ hoặc ký ức.
                 tts_start = time.perf_counter()
                 logger.info("[TY-DIAG] TTS_START voice=%s", selected_voice)
                 audio_b64 = None
-                if selected_voice == "vip_taothao":
-                    audio_b64 = generate_fish_audio(reply_text)
+                try:
+                    if selected_voice == "vip_taothao":
+                        audio_b64 = generate_fish_audio(reply_text)
+                    elif selected_voice == "elevenlabs_test":
+                        audio_b64 = generate_elevenlabs_audio(reply_text)
 
-                if selected_voice == "elevenlabs_test":
-                    audio_b64 = generate_elevenlabs_audio(reply_text)
-
-                # Trial mode: never silently fall back to slow Edge TTS.
-                if not audio_b64 and selected_voice != "elevenlabs_test":
-                    voice_fallback = selected_voice if selected_voice in FREE_VOICES else "nam_minh"
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        audio_b64 = loop.run_until_complete(generate_free_voice(reply_text, voice_fallback))
-                    finally:
-                        loop.close()
-
-                tts_elapsed = time.perf_counter() - tts_start
-                logger.info("[TY-DIAG] TTS_DONE duration=%.2fs audio_ok=%s", tts_elapsed, bool(audio_b64))
+                    # Never silently fall back to paid ElevenLabs.
+                    if not audio_b64 and selected_voice != "elevenlabs_test":
+                        voice_fallback = selected_voice if selected_voice in FREE_VOICES else "nam_minh"
+                        loop = asyncio.new_event_loop()
+                        try:
+                            asyncio.set_event_loop(loop)
+                            audio_b64 = loop.run_until_complete(generate_free_voice(reply_text, voice_fallback))
+                        finally:
+                            asyncio.set_event_loop(None)
+                            loop.close()
+                except Exception as exc:
+                    # Không ghi nội dung người dùng, khóa hay transcript vào log.
+                    logger.warning("[TY-VOICE-4E1] TTS_FAILED voice=%s error_type=%s", selected_voice, type(exc).__name__)
+                    audio_b64 = None
+                logger.info("[TY-DIAG] TTS_DONE duration=%.2fs audio_ok=%s",
+                            time.perf_counter() - tts_start, bool(audio_b64))
 
                 # 8. Phản hồi về điện thoại
                 resp_bytes = json.dumps({"reply": reply_text, "audio": audio_b64}, ensure_ascii=False).encode("utf-8")
@@ -778,9 +787,6 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 self.send_cors_headers()
                 self.end_headers()
                 self.wfile.write(resp_bytes)
-                capture_after_reply = True
-                memory_instance_id = instance_id
-
             except Exception as e:
                 logger.error(f"Lỗi: {e}")
                 err_bytes = json.dumps({"reply": "Bộ não đang điều phối...", "audio": None}, ensure_ascii=False).encode("utf-8")
