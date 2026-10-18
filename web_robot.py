@@ -92,22 +92,39 @@ def generate_fish_audio(text: str) -> str:
     return None
 
 
-async def generate_free_voice(text: str, voice_key: str) -> str:
+async def generate_free_voice(text: str, voice_key: str) -> str | None:
+    """TY-VOICE V1: bounded retry of the SAME free Edge voice; never paid fallback.
+
+    Each attempt creates its own Communicate session, cleans its temp MP3, and
+    has a deadline. A failed TTS returns None; chat text and memory remain safe.
+    """
     cfg = FREE_VOICES.get(voice_key, FREE_VOICES["nam_minh"])
     clean_text = text.replace("*", "").replace("#", "").replace("`", "").strip()
-    temp_file = f"temp_voice_{voice_key}_{int(time.time() * 1000)}.mp3"
-    try:
-        comm = edge_tts.Communicate(clean_text, voice=cfg["voice"], pitch=cfg["pitch"], rate=cfg["rate"])
-        await comm.save(temp_file)
-        with open(temp_file, "rb") as f:
-            audio_b64 = base64.b64encode(f.read()).decode("utf-8")
-        return audio_b64
-    finally:
-        if os.path.exists(temp_file):
+    if not clean_text:
+        return None
+    for attempt in (1, 2):
+        temp_file = f"temp_voice_{voice_key}_{threading.get_ident()}_{time.time_ns()}_{attempt}.mp3"
+        try:
+            comm = edge_tts.Communicate(clean_text, voice=cfg["voice"], pitch=cfg["pitch"], rate=cfg["rate"])
+            await asyncio.wait_for(comm.save(temp_file), timeout=18)
+            with open(temp_file, "rb") as f:
+                audio = f.read()
+            if len(audio) < 300:
+                raise ValueError("Empty or invalid-length audio")
+            logger.info("[TY-VOICE-V1] EDGE_OK voice=%s attempt=%d bytes=%d", voice_key, attempt, len(audio))
+            return base64.b64encode(audio).decode("ascii")
+        except Exception as exc:
+            logger.warning("[TY-VOICE-V1] EDGE_RETRYABLE_FAILURE voice=%s attempt=%d type=%s",
+                           voice_key, attempt, type(exc).__name__)
+            if attempt == 1:
+                await asyncio.sleep(0.7)
+        finally:
             try:
                 os.remove(temp_file)
-            except Exception:
+            except OSError:
                 pass
+    logger.warning("[TY-VOICE-V1] EDGE_GAVE_UP voice=%s attempts=2", voice_key)
+    return None
 
 
 # TY-MEMORY-INTEGRITY 4B: opt-in, bounded Android draft capture.
