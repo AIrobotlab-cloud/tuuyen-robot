@@ -213,16 +213,87 @@ else:
 
 
 
+# TY-AUTH V1.0 — founder-only, fail-closed if enabled but misconfigured.
+# Same-origin only; no API secrets in browser. Never log credentials or tokens.
+from collections import deque
+from urllib.parse import urlsplit
+
+AUTH_ENFORCED = os.getenv("TY_AUTH_ENFORCE", "0").strip() == "1"
+FOUNDER_UID = os.getenv("TY_FOUNDER_USER_ID", "").strip().lower()
+AUTH_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
+AUTH_BASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+AUTH_READY = bool(FOUNDER_UID and AUTH_ANON_KEY and AUTH_BASE_URL)
+LOGIN_LOCK = threading.Lock()
+LOGIN_ATTEMPTS = {}  # process-local, best-effort; use edge rate limits in production
+
+
+def _supabase_auth_headers(token=None):
+    headers = {"apikey": AUTH_ANON_KEY, "Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    return headers
+
+
+def _auth_uid(token):
+    if not AUTH_READY or not token or len(token) > 8192:
+        return None
+    try:
+        res = requests.get(AUTH_BASE_URL + "/auth/v1/user",
+                           headers=_supabase_auth_headers(token), timeout=(3, 8))
+        if res.status_code != 200:
+            return None
+        data = res.json()
+        return str(data.get("id", "")).lower() or None
+    except (ValueError, requests.RequestException):
+        return None
+
+
 class RobotWebHandler(SimpleHTTPRequestHandler):
     def send_cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Connection", "close")
 
+    def _deny(self, code=401, message="Unauthorized"):
+        self.send_rpg_json({"ok": False, "error": message}, code)
+
+    def _require_founder(self):
+        if not AUTH_ENFORCED:
+            return True
+        if not AUTH_READY:
+            self._deny(503, "Authentication not configured")
+            return False
+        authorization = self.headers.get("Authorization", "")
+        if not authorization.startswith("Bearer "):
+            self._deny(401)
+            return False
+        token = authorization[7:].strip()
+        uid = _auth_uid(token)
+        if uid is None:
+            self._deny(401)
+            return False
+        if uid != FOUNDER_UID:
+            self._deny(403, "Forbidden")
+            return False
+        return True
+
+    def _read_json(self, max_bytes=8192):
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+            if not 0 < size <= max_bytes:
+                self._deny(413, "Invalid request size")
+                return None
+            data = json.loads(self.rfile.read(size))
+            if not isinstance(data, dict):
+                self._deny(400, "Invalid JSON")
+                return None
+            return data
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            self._deny(400, "Invalid JSON")
+            return None
+
     def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_cors_headers()
+        self.send_response(405)
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -241,9 +312,15 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
             self.send_rpg_json({"ok": True, "service": "tuuyen-robot"})
             return
 
+        if self.path.split("?", 1)[0] == "/api/auth/status":
+            self.send_rpg_json({"required": AUTH_ENFORCED, "ready": AUTH_READY if AUTH_ENFORCED else True})
+            return
+
         # V3.8.1: Public RPG showcase. Only allowlisted, aggregate, non-personal fields.
         # Never include memory content, conversation text, account IDs, or quest prompts.
         if self.path.split("?", 1)[0] == "/api/rpg":
+            if not self._require_founder():
+                return
             with BRAIN_LOCK:
                 try:
                     robot_code = "TUYUEN-001"  # fixed public demo instance, not caller-controlled
@@ -282,17 +359,75 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
             with open("index.html", "rb") as f:
                 self.wfile.write(f.read())
         else:
-            super().do_GET()
+            self._deny(404, "Not found")
 
     def do_POST(self):
-        if self.path == "/api/chat":
-            content_length = int(self.headers.get("Content-Length", 0))
-            post_data = self.rfile.read(content_length)
-            data = json.loads(post_data.decode("utf-8")) if post_data else {}
+        if self.path == "/api/auth/login":
+            if not AUTH_ENFORCED or not AUTH_READY:
+                self._deny(503, "Authentication not enabled")
+                return
+            # Per-IP throttling is best-effort only. Also enforce limits at the edge.
+            ip = self.client_address[0]
+            now = time.monotonic()
+            with LOGIN_LOCK:
+                history = [t for t in LOGIN_ATTEMPTS.get(ip, []) if now-t < 300]
+                if len(history) >= 6:
+                    self._deny(429, "Too many attempts")
+                    return
+                history.append(now)
+                LOGIN_ATTEMPTS[ip] = history
+                if len(LOGIN_ATTEMPTS) > 3000:
+                    LOGIN_ATTEMPTS.clear()
+            data = self._read_json(4096)
+            if data is None:
+                return
+            email, password = data.get("email"), data.get("password")
+            if not isinstance(email, str) or not isinstance(password, str) or not (3 <= len(email) <= 254) or not (1 <= len(password) <= 1024):
+                self._deny(400, "Invalid credentials")
+                return
+            try:
+                r = requests.post(AUTH_BASE_URL + "/auth/v1/token?grant_type=password",
+                                  headers=_supabase_auth_headers(),
+                                  json={"email": email, "password": password}, timeout=(4, 12))
+                if r.status_code != 200:
+                    self._deny(401, "Invalid credentials")
+                    return
+                result = r.json()
+                token = result.get("access_token", "")
+                uid = _auth_uid(token)
+                if uid != FOUNDER_UID:
+                    self._deny(403, "Forbidden")
+                    return
+                self.send_rpg_json({"ok": True, "access_token": token,
+                                    "expires_in": result.get("expires_in", 3600)})
+            except (requests.RequestException, ValueError):
+                self._deny(503, "Auth service unavailable")
+            return
 
-            user_msg = (data.get("message") or "").strip()
+        if self.path == "/api/chat":
+            if not self._require_founder():
+                return
+
+            data = self._read_json(16384)
+            if data is None:
+                return
+
+            user_raw = data.get("message", "")
+            if not isinstance(user_raw, str):
+                self._deny(400, "Invalid message")
+                return
+            user_msg = user_raw.strip()
             selected_model = data.get("model", DEFAULT_MODEL)
             selected_voice = data.get("voice", "nam_minh")
+            if not isinstance(user_msg, str) or len(user_msg) > 2000:
+                self._deny(413, "Message too long")
+                return
+            if selected_model not in ("gpt-4o", "gpt-4o-mini"):
+                self._deny(400, "Invalid model")
+                return
+            if selected_voice not in ("nam_minh", "hoai_my", "vip_taothao", "elevenlabs_test"):
+                self._deny(400, "Invalid voice")
+                return
 
             if len(user_msg) < 2:
                 resp_bytes = json.dumps({"reply": "", "audio": None}, ensure_ascii=False).encode("utf-8")

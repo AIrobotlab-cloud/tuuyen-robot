@@ -170,6 +170,13 @@
 
         @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; } }
         @keyframes pulse-red { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+
+        .auth-screen { position:fixed; inset:0; z-index:1000; background:#020617; display:none; align-items:center; justify-content:center; padding:22px; }
+        .auth-screen.open { display:flex; }
+        .auth-panel { width:100%; max-width:380px; background:#0f172a; border:1px solid #0284c7; border-radius:16px; padding:24px; display:flex; flex-direction:column; gap:14px; }
+        .auth-panel input { font-size:16px; padding:12px; border:1px solid #334155; border-radius:8px; background:#020617; color:#fff; }
+        .auth-panel button { padding:12px; border:0; border-radius:8px; background:#0284c7; color:white; font-weight:700; }
+        .auth-error { color:#fca5a5; font-size:13px; min-height:18px; }
     </style>
 </head>
 <body class="state-idle">
@@ -262,6 +269,18 @@
         </div>
     </div>
 
+
+    <div class="auth-screen" id="auth-screen">
+      <form class="auth-panel" id="auth-form" autocomplete="on">
+        <h2>🔐 Tử Uyên — Quyền người sáng lập</h2>
+        <p style="font-size:13px;color:#94a3b8">Đăng nhập để mở bộ não và ký ức riêng.</p>
+        <input id="auth-email" type="email" autocomplete="username" placeholder="Email" required>
+        <input id="auth-password" type="password" autocomplete="current-password" placeholder="Mật khẩu" required>
+        <button id="auth-submit" type="submit">Mở quyền truy cập</button>
+        <div class="auth-error" id="auth-error" role="alert"></div>
+      </form>
+    </div>
+
     <audio id="server-audio" style="display: none;" playsinline></audio>
 
     <script>
@@ -275,6 +294,62 @@
         const modeBtn = document.getElementById('mode-btn');
         const voiceSelect = document.getElementById('voice-select');
         const serverAudio = document.getElementById('server-audio');
+
+
+        // TY-AUTH V1.0: access token only in tab memory; never localStorage.
+        let founderToken = null;
+        let authRequired = true; // fail closed until status is fetched
+        const authScreen = document.getElementById('auth-screen');
+        const authError = document.getElementById('auth-error');
+        function showAuth(message='') {
+            founderToken = null;
+            authScreen.classList.add('open');
+            authError.textContent = message;
+            micBtn.disabled = true;
+        }
+        function authHeaders() {
+            return founderToken ? { 'Authorization': 'Bearer ' + founderToken } : {};
+        }
+        async function initAuth() {
+            showAuth();
+            try {
+                const response = await fetch('/api/auth/status', {cache:'no-store'});
+                if (!response.ok) throw new Error('Status error');
+                const data = await response.json();
+                authRequired = data.required !== false;
+                if (!authRequired) {
+                    authScreen.classList.remove('open');
+                    micBtn.disabled = false;
+                } else if (!data.ready) {
+                    authError.textContent = 'Máy chủ chưa cấu hình xác thực. Liên hệ quản trị.';
+                }
+            } catch(e) {
+                showAuth('Không kiểm tra được trạng thái xác thực.');
+            }
+        }
+        document.getElementById('auth-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const btn = document.getElementById('auth-submit');
+            btn.disabled = true;
+            authError.textContent = '';
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method:'POST', headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({email:document.getElementById('auth-email').value.trim(),
+                        password:document.getElementById('auth-password').value})
+                });
+                if (!response.ok) throw new Error('Sai thông tin đăng nhập hoặc không được cấp quyền.');
+                const data = await response.json();
+                if (!data.access_token) throw new Error('Không có phiên xác thực.');
+                founderToken = data.access_token;
+                document.getElementById('auth-password').value = '';
+                authScreen.classList.remove('open');
+                micBtn.disabled = false;
+                loadRpgStatus();
+            } catch(e) { showAuth(e.message); }
+            finally { btn.disabled = false; }
+        });
+        initAuth();
 
         let currentModel = 'gpt-4o-mini';
         let isListening = false;
@@ -360,7 +435,8 @@
         // 2. HỆ THỐNG ĐỌC & HIỂN THỊ CẤP BẬC RPG ĐỘC LẬP (KHÔNG ẢNH HƯỞNG ÂM THANH)
         async function loadRpgStatus() {
             try {
-                const res = await fetch('/api/rpg');
+                const res = await fetch('/api/rpg', {headers:authHeaders()});
+                if (res.status === 401 || res.status === 403) { showAuth('Phiên đăng nhập hết hạn.'); return; }
                 if (!res.ok) return;
                 const data = await res.json();
                 if (!data.ok || !data.dashboard) return;
@@ -428,7 +504,7 @@
         }
 
         // Tải huy hiệu RPG ngay khi mở trang
-        loadRpgStatus();
+        // Auth success will load RPG data.
 
         // 3. KHỞI TẠO NHẬN DIỆN GIỌNG NÓI ĐƠN PHIÊN CHUẨN XÁC CỦA BẢN V3.7
         if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
@@ -602,6 +678,7 @@
 
         // 4. XỬ LÝ CÂU HỎI VÀ PHÁT ÂM THANH TRẢ LỜI (GIỮ NGUYÊN 100% V3.7)
         async function handleUserSpeech(query) {
+            if (authRequired && !founderToken) { showAuth('Vui lòng đăng nhập.'); return; }
             if (!query || query.trim().length < 2) {
                 isBusy = false;
                 isListening = false;
@@ -616,7 +693,7 @@
             try {
                 const response = await fetch('/api/chat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', ...authHeaders() },
                     body: JSON.stringify({ 
                         message: query.trim(), 
                         model: currentModel,
@@ -624,6 +701,11 @@
                     })
                 });
 
+                if (response.status === 401 || response.status === 403) {
+                    showAuth('Phiên đăng nhập hết hạn hoặc không đủ quyền.');
+                    reportVoiceError('AUTH_REQUIRED');
+                    return;
+                }
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const data = await response.json();
