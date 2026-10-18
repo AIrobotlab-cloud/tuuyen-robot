@@ -305,6 +305,61 @@ def _draft_read_context(instance_id, question):
         return ""
 
 
+# TY-MEMORY 4D: explicit Founder review. Disabled unless opt-in.
+# A confirmed row is revised by the Founder and becomes verified; rejection only
+# changes source so the 4C draft retriever will no longer consider that row.
+MEMORY_4D_ENABLED = os.getenv("TY_MEMORY_4D_REVIEW", "0").strip() == "1"
+DRAFT_SOURCE_4D_REJECTED = "Founder từ chối - TY-4D"
+DRAFT_SOURCE_4D_APPROVED = "Founder xác nhận - TY-4D"
+
+
+def _review_instance_id():
+    # Uses the same project instance as /api/chat, not caller-supplied IDs.
+    with BRAIN_LOCK:
+        instance_id, _ = bot_brain.get_instance_context()
+    return instance_id
+
+
+def _memory_review_get():
+    instance_id = _review_instance_id()
+    rows = (bot_brain.supabase.table("memories")
+            .select("id,content,memory_type,created_at")
+            .eq("instance_id", instance_id)
+            .eq("context_source", DRAFT_SOURCE_4B)
+            .eq("is_verified", False)
+            .order("created_at", desc=True).limit(30).execute()).data or []
+    return rows
+
+
+def _memory_review_decide(data):
+    row_id = data.get("id")
+    action = data.get("action")
+    if not isinstance(row_id, str) or not re.fullmatch(r"[0-9a-fA-F-]{36}", row_id):
+        raise ValueError("Invalid ID")
+    if action not in ("approve", "reject"):
+        raise ValueError("Invalid action")
+    content = data.get("content", "")
+    if action == "approve":
+        if not isinstance(content, str) or not (10 <= len(content.strip()) <= 280):
+            raise ValueError("Nội dung đã xác nhận phải có 10–280 ký tự")
+        if data.get("confirmation") != "XAC NHAN":
+            raise ValueError("Chưa xác nhận hành động")
+        content = content.strip()
+    instance_id = _review_instance_id()
+    db = bot_brain.supabase
+    # CAS style: only pending 4B drafts may be changed. Never change existing verified memories.
+    q = (db.table("memories").update({
+        "context_source": DRAFT_SOURCE_4D_APPROVED if action == "approve" else DRAFT_SOURCE_4D_REJECTED,
+        **({"content": content, "is_verified": True, "confidence_score": 1.0} if action == "approve" else {})
+    }).eq("id", row_id).eq("instance_id", instance_id)
+      .eq("context_source", DRAFT_SOURCE_4B).eq("is_verified", False))
+    rows = (q.execute()).data or []
+    if len(rows) != 1:
+        return False
+    logger.info("[TY-MEM-4D] founder_review action=%s", action)
+    return True
+
+
 def _supabase_auth_headers(token=None):
     headers = {"apikey": AUTH_ANON_KEY, "Content-Type": "application/json"}
     if token:
@@ -396,6 +451,37 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
 
         # V3.8.1: Public RPG showcase. Only allowlisted, aggregate, non-personal fields.
         # Never include memory content, conversation text, account IDs, or quest prompts.
+        if self.path.split("?", 1)[0] == "/memory-review":
+            if not (AUTH_ENFORCED and AUTH_READY and MEMORY_4D_ENABLED):
+                self._deny(404, "Not found")
+                return
+            try:
+                page = open("memory_review.html", "rb").read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(page)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'")
+                self.end_headers()
+                self.wfile.write(page)
+            except OSError:
+                self._deny(503, "Review UI unavailable")
+            return
+
+        if self.path.split("?", 1)[0] == "/api/memory/review":
+            if not (AUTH_ENFORCED and AUTH_READY and MEMORY_4D_ENABLED):
+                self._deny(404, "Not found")
+                return
+            if not self._require_founder():
+                return
+            try:
+                self.send_rpg_json({"ok": True, "drafts": _memory_review_get()})
+            except Exception as exc:
+                logger.warning("[TY-MEM-4D] LIST_FAILED class=%s", type(exc).__name__)
+                self._deny(503, "Memory review unavailable")
+            return
+
         if self.path.split("?", 1)[0] == "/api/rpg":
             if not self._require_founder():
                 return
@@ -480,6 +566,27 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                                     "expires_in": result.get("expires_in", 3600)})
             except (requests.RequestException, ValueError):
                 self._deny(503, "Auth service unavailable")
+            return
+
+        if self.path == "/api/memory/review":
+            if not (AUTH_ENFORCED and AUTH_READY and MEMORY_4D_ENABLED):
+                self._deny(404, "Not found")
+                return
+            if not self._require_founder():
+                return
+            data = self._read_json(4096)
+            if data is None:
+                return
+            try:
+                if not _memory_review_decide(data):
+                    self._deny(409, "Draft no longer pending")
+                    return
+                self.send_rpg_json({"ok": True})
+            except ValueError as exc:
+                self._deny(400, str(exc))
+            except Exception as exc:
+                logger.warning("[TY-MEM-4D] UPDATE_FAILED class=%s", type(exc).__name__)
+                self._deny(503, "Memory review unavailable")
             return
 
         if self.path == "/api/chat":

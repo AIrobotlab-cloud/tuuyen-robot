@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Tử Uyên — Founder duyệt ký ức 4D</title>
+<style>body{font:16px system-ui,sans-serif;background:#08111f;color:#e2e8f0;max-width:800px;margin:auto;padding:20px}h1{font-size:24px}input,textarea,button{font:inherit;border-radius:8px;padding:10px}input,textarea{background:#111e31;color:#fff;border:1px solid #4b6178;width:100%;box-sizing:border-box}label{display:block;margin:10px 0}textarea{min-height:85px}button{background:#087aab;border:0;color:white;margin:8px 6px 0 0;cursor:pointer}button.reject{background:#903941}button:disabled{opacity:.5}article{border:1px solid #36516d;padding:16px;border-radius:12px;margin:15px 0}small{color:#9fb4c8}#notice{white-space:pre-wrap;color:#fbbf24}form{max-width:520px}p{line-height:1.5}</style></head>
+<body><h1>TY-MEMORY 4D — Founder duyệt ký ức</h1>
+<p>Ký ức nháp <strong>không phải sự thật</strong>. Chỉ xác nhận khi anh chắc chắn; hãy viết lại nội dung chính xác trước khi duyệt. Từ chối sẽ loại nháp khỏi luồng 4C, không xóa bản ghi.</p>
+<form id="login"><label>Email Founder<input id="email" type="email" autocomplete="username" required></label><label>Mật khẩu<input id="password" type="password" autocomplete="current-password" required></label><button type="submit">Đăng nhập để duyệt</button></form>
+<div id="notice" role="status"></div><section id="items"></section>
+<script>
+'use strict';
+let token = '';
+const notice = document.getElementById('notice');
+const list = document.getElementById('items');
+async function api(path, body) {
+ const r = await fetch(path,{method:body?'POST':'GET',headers:{...(token?{Authorization:'Bearer '+token}:{}),...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),cache:'no-store'});
+ const d = await r.json(); if(!r.ok) throw new Error(d.error || ('HTTP '+r.status)); return d;
+}
+document.getElementById('login').addEventListener('submit',async e=>{
+ e.preventDefault();notice.textContent='Đang đăng nhập...';
+ try {const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.getElementById('email').value.trim(),password:document.getElementById('password').value})});const d=await r.json();if(!r.ok||!d.access_token)throw new Error(d.error||'Đăng nhập thất bại');token=d.access_token;document.getElementById('password').value='';document.getElementById('login').hidden=true; await load();}
+ catch(err){notice.textContent=err.message;}
+});
+async function load(){notice.textContent='Đang tải ký ức nháp...';list.replaceChildren();
+ try {const d=await api('/api/memory/review');notice.textContent=d.drafts.length?'Chỉ duyệt những thông tin anh thực sự xác nhận.':'Không có ký ức nháp đang chờ duyệt.';
+ for(const item of d.drafts){const card=document.createElement('article');const heading=document.createElement('small');heading.textContent='Bản nháp • '+(item.created_at||'');const original=document.createElement('p');original.textContent=item.content;
+ const edit=document.createElement('textarea');edit.value=item.content;edit.setAttribute('aria-label','Nội dung được Founder xác nhận');
+ const approve=document.createElement('button');approve.textContent='Xác nhận nội dung đã sửa';const reject=document.createElement('button');reject.className='reject';reject.textContent='Từ chối bản nháp';
+ const busy=v=>{approve.disabled=v;reject.disabled=v;};
+ approve.addEventListener('click',async()=>{if(!confirm('Chỉ duyệt khi nội dung đã viết là SỰ THẬT anh xác nhận. Tiếp tục?'))return;busy(true);try{await api('/api/memory/review',{id:item.id,action:'approve',content:edit.value,confirmation:'XAC NHAN'});await load();}catch(err){notice.textContent=err.message;busy(false);}});
+ reject.addEventListener('click',async()=>{if(!confirm('Loại bản nháp này khỏi truy xuất 4C?'))return;busy(true);try{await api('/api/memory/review',{id:item.id,action:'reject'});await load();}catch(err){notice.textContent=err.message;busy(false);}});
+ card.append(heading,original,edit,approve,reject);list.append(card);
+ }}catch(err){notice.textContent='Không tải được: '+err.message;}
+}
+</script></body></html>
