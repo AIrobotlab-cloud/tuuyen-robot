@@ -16,6 +16,8 @@ import base64
 import asyncio
 import logging
 import threading
+import hashlib
+import hmac
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import edge_tts
 import requests
@@ -179,7 +181,7 @@ def _memory_draft_worker():
             if any(m.get("content", "").casefold() == content.casefold()
                    for m in (recent.data or [])):
                 continue
-            database.table("memories").insert({
+            result = database.table("memories").insert({
                 "instance_id": instance_id,
                 "memory_type": category,
                 "content": content,
@@ -188,6 +190,7 @@ def _memory_draft_worker():
                 "is_verified": False,
             }).execute()
             logger.info("[TY-MEM-4B] DRAFT_SAVED type=%s", category)
+            _telegram_notify_draft(content, category, instance_id, inserted_id=(getattr(result, "data", None) or [{}])[0].get("id"))
         except Exception as exc:
             # No user text or secrets in logs. A failed extraction must not affect chat.
             logger.warning("[TY-MEM-4B] DRAFT_FAILED class=%s", type(exc).__name__)
@@ -360,6 +363,134 @@ def _memory_review_decide(data):
     return True
 
 
+# TY-MEMORY 4F: Telegram webhook. No polling and no blocking outbound calls at import.
+# Activate ONLY when all Founder protection and review gates are enabled.
+TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TG_FOUNDER_ID = os.getenv("TY_TELEGRAM_FOUNDER_ID", "").strip()
+TG_WEBHOOK_ENABLED = bool(
+    AUTH_ENFORCED and AUTH_READY and MEMORY_4D_ENABLED and TG_TOKEN
+    and TG_FOUNDER_ID.isdecimal() and int(TG_FOUNDER_ID) > 0
+)
+TG_WEBHOOK_PATH = "/api/telegram/webhook"
+# Telegram accepts alphanumeric + _ and - for secret_token; keep it server-only.
+TG_WEBHOOK_SECRET = hashlib.sha256(("ty-4f-hook:" + TG_TOKEN).encode()).hexdigest() if TG_TOKEN else ""
+TG_API = "https://api.telegram.org/bot" + TG_TOKEN + "/" if TG_TOKEN else ""
+TG_IMPORTANT_TYPES = {"hardware_safety", "project", "fact"}
+
+
+def _telegram_call(method, body, timeout=8):
+    if not TG_WEBHOOK_ENABLED:
+        return None
+    try:
+        response = requests.post(TG_API + method, json=body, timeout=(3, timeout))
+        result = response.json() if response.status_code == 200 else {}
+        if response.status_code != 200 or not result.get("ok"):
+            logger.warning("[TY-MEM-4F] TG_CALL_FAILED method=%s http=%s", method, response.status_code)
+            return None
+        return result.get("result")
+    except (requests.RequestException, ValueError):
+        logger.warning("[TY-MEM-4F] TG_CALL_ERROR method=%s", method)
+        return None
+
+
+def _telegram_notify_draft(content, category, instance_id, inserted_id=None):
+    # Low-priority preferences remain accessible at /memory-review, without push spam.
+    if not TG_WEBHOOK_ENABLED or category not in TG_IMPORTANT_TYPES:
+        return
+    if not isinstance(inserted_id, str) or not re.fullmatch(r"[0-9a-fA-F-]{36}", inserted_id):
+        logger.warning("[TY-MEM-4F] NOTIFY_SKIPPED_NO_ID")
+        return
+    try:
+        buttons = {
+            "inline_keyboard": [
+                [{"text": "✅ Xác nhận nguyên văn", "callback_data": "m4f:a:" + inserted_id},
+                 {"text": "❌ Từ chối", "callback_data": "m4f:r:" + inserted_id}],
+                [{"text": "✏️ Chỉnh sửa trên web", "url": os.getenv("TY_PUBLIC_BASE_URL", "https://tuyuen-robot.onrender.com").rstrip("/") + "/memory-review"}],
+            ]
+        }
+        sent = _telegram_call("sendMessage", {
+            "chat_id": int(TG_FOUNDER_ID),
+            "text": "🧠 Tử Uyên — ký ức NHÁP (chưa xác minh)\n\n" + content +
+                    "\n\nChỉ nhấn xác nhận nếu nội dung chính xác; nếu cần sửa, dùng trang web.",
+            "reply_markup": buttons,
+        })
+        if sent:
+            logger.info("[TY-MEM-4F] NOTIFIED type=%s", category)
+    except Exception as exc:
+        logger.warning("[TY-MEM-4F] NOTIFY_ERROR class=%s", type(exc).__name__)
+
+
+def _telegram_process_update(update):
+    if not isinstance(update, dict):
+        return
+    callback = update.get("callback_query")
+    if isinstance(callback, dict):
+        callback_id = callback.get("id")
+        actor = str((callback.get("from") or {}).get("id", ""))
+        if not hmac.compare_digest(actor, TG_FOUNDER_ID):
+            logger.warning("[TY-MEM-4F] REJECTED_NON_FOUNDER")
+            if callback_id:
+                _telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "Không có quyền duyệt.", "show_alert": True})
+            return
+        data = callback.get("data", "")
+        match = re.fullmatch(r"m4f:([ar]):([0-9a-fA-F-]{36})", data)
+        if not match:
+            if callback_id:
+                _telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "Thao tác không hợp lệ."})
+            return
+        decision, row_id = match.groups()
+        try:
+            db = bot_brain.supabase
+            instance_id = _review_instance_id()
+            lookup = (db.table("memories").select("content").eq("id", row_id)
+                      .eq("instance_id", instance_id).eq("context_source", DRAFT_SOURCE_4B)
+                      .eq("is_verified", False).limit(1).execute()).data or []
+            if not lookup:
+                msg = "Bản nháp đã được xử lý hoặc không còn tồn tại."
+            else:
+                content = lookup[0]["content"]
+                # The existing 4D CAS prevents approving an already-handled row.
+                ok = _memory_review_decide({
+                    "id": row_id, "action": "approve" if decision == "a" else "reject",
+                    "content": content, "confirmation": "XAC NHAN",
+                })
+                msg = ("✅ Đã xác nhận nội dung nguyên văn." if decision == "a" else "❌ Đã từ chối bản nháp.") if ok else "Bản nháp đã được xử lý."
+            if callback_id:
+                _telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": msg, "show_alert": True})
+            origin = callback.get("message") or {}
+            chat_id = (origin.get("chat") or {}).get("id")
+            if chat_id == int(TG_FOUNDER_ID):
+                _telegram_call("sendMessage", {"chat_id": chat_id, "text": msg})
+        except Exception as exc:
+            logger.warning("[TY-MEM-4F] REVIEW_FAILED class=%s", type(exc).__name__)
+            if callback_id:
+                _telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "Đã xảy ra lỗi, hãy thử trên trang duyệt.", "show_alert": True})
+        return
+    message = update.get("message")
+    if isinstance(message, dict):
+        actor = str((message.get("from") or {}).get("id", ""))
+        chat = message.get("chat") or {}
+        if hmac.compare_digest(actor, TG_FOUNDER_ID) and chat.get("type") == "private" and message.get("text") == "/start":
+            _telegram_call("sendMessage", {"chat_id": int(TG_FOUNDER_ID),
+                         "text": "✅ Tử Uyên 4F đã kết nối. Ký ức quan trọng sẽ được gửi tới đây để Founder duyệt."})
+
+
+def _telegram_register_webhook():
+    # Run AFTER HTTP server binds; a failing Telegram API must NEVER block Render startup.
+    if not TG_WEBHOOK_ENABLED:
+        logger.info("[TY-MEM-4F] DISABLED")
+        return
+    url = os.getenv("TY_PUBLIC_BASE_URL", "https://tuyuen-robot.onrender.com").rstrip("/") + TG_WEBHOOK_PATH
+    for attempt in range(3):
+        ok = _telegram_call("setWebhook", {"url": url, "secret_token": TG_WEBHOOK_SECRET,
+                        "allowed_updates": ["callback_query", "message"], "drop_pending_updates": False}, timeout=8)
+        if ok is True:
+            logger.info("[TY-MEM-4F] WEBHOOK_REGISTERED")
+            return
+        time.sleep(3)
+    logger.warning("[TY-MEM-4F] WEBHOOK_REGISTRATION_FAILED")
+
+
 def _supabase_auth_headers(token=None):
     headers = {"apikey": AUTH_ANON_KEY, "Content-Type": "application/json"}
     if token:
@@ -526,6 +657,22 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
             self._deny(404, "Not found")
 
     def do_POST(self):
+        if self.path == TG_WEBHOOK_PATH:
+            if not TG_WEBHOOK_ENABLED:
+                self._deny(404, "Not found")
+                return
+            supplied = self.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+            if not hmac.compare_digest(supplied, TG_WEBHOOK_SECRET):
+                self._deny(403, "Forbidden")
+                return
+            payload = self._read_json(65536)
+            if payload is None:
+                return
+            # Return 200 promptly so Telegram does not retry; processing happens in a worker.
+            threading.Thread(target=_telegram_process_update, args=(payload,), daemon=True,
+                             name="ty-telegram-update").start()
+            self.send_rpg_json({"ok": True})
+            return
         if self.path == "/api/auth/login":
             if not AUTH_ENFORCED or not AUTH_READY:
                 self._deny(503, "Authentication not enabled")
@@ -808,6 +955,7 @@ def run(port=None):
         port = int(os.environ.get("PORT", 8000))
     server_address = ("0.0.0.0", port)
     httpd = ThreadingHTTPServer(server_address, RobotWebHandler)
+    threading.Thread(target=_telegram_register_webhook, name="ty-telegram-webhook", daemon=True).start()
     logger.info(f"🚀 MẶT ROBOT TỬ UYÊN V3.8.4 (THREADED HTTP + SERIALIZED BRAIN + DIAG) LIVE TẠI: {port}")
     httpd.serve_forever()
 
