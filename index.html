@@ -384,6 +384,7 @@
         // Chrome cannot wake by voice from "off"; opt-in "standby" leaves recognition armed.
         let listenMode = 'off'; // off | followup | standby
         let followupDeadline = 0;
+        let speechInProgress = false; // 15s is idle wait, not a speaking limit.
         let followupTimer = null;
         let recognitionRetry = null;
         let recognitionHeartbeat = null;
@@ -412,6 +413,7 @@
             cancelListenTimers();
             listenMode = 'off';
             followupDeadline = 0;
+            speechInProgress = false;
             isListening = false;
             recognizerStarting = false;
             recognizerStartAt = 0;
@@ -428,7 +430,23 @@
             }, delay);
         }
         function listenDeadlineReached() {
-            return listenMode === 'followup' && Date.now() >= followupDeadline;
+            return listenMode === 'followup' && !speechInProgress &&
+                followupDeadline > 0 && Date.now() >= followupDeadline;
+        }
+        function armFollowupIdleTimer() {
+            if (followupTimer) clearTimeout(followupTimer);
+            followupTimer = null;
+            if (listenMode !== 'followup' || isBusy || speechInProgress) return;
+            followupDeadline = Date.now() + FOLLOWUP_MS;
+            followupTimer = setTimeout(() => {
+                followupTimer = null;
+                if (listenMode !== 'followup' || isBusy || speechInProgress) return;
+                if (!listenDeadlineReached()) return;
+                const wasListening = followupEverStarted;
+                shutdownRecognition();
+                statusText.textContent = wasListening ? 'NGHỈ — KHÔNG CÓ LỜI NÓI MỚI' :
+                    'MIC CHƯA BẬT ĐƯỢC — CHẠM MIC ĐỂ THỬ LẠI';
+            }, FOLLOWUP_MS);
         }
         // A single delayed recognition.start() is unreliable immediately after
         // Android finishes TTS/aborts an older recognition session. Keep a
@@ -458,14 +476,8 @@
             shutdownRecognition();
             listenMode = 'followup';
             followupEverStarted = false;
-            followupDeadline = Date.now() + FOLLOWUP_MS;
-            followupTimer = setTimeout(() => {
-                if (listenMode === 'followup' && !isBusy) {
-                    const wasListening = followupEverStarted;
-                    shutdownRecognition();
-                    statusText.textContent = wasListening ? 'NGHỈ — CHẠM MIC ĐỂ TRÒ CHUYỆN' : 'MIC CHƯA BẬT ĐƯỢC — CHẠM MIC ĐỂ THỬ LẠI';
-                }
-            }, FOLLOWUP_MS);
+            speechInProgress = false;
+            armFollowupIdleTimer();
             // Wait for the loudspeaker to finish completely before enabling input.
             statusText.textContent = 'ĐANG MỞ MICROPHONE — CHỜ…';
             startRecognitionHeartbeat();
@@ -796,7 +808,22 @@
                 if (listenMode === 'followup') followupEverStarted = true;
                 micBtn.classList.add('active');
                 setRobotState('listening');
-                statusText.textContent = listenMode === 'standby' ? 'CHỜ GỌI "TỬ UYÊN ƠI"' : 'ĐANG LẮNG NGHE (15 GIÂY)';
+                statusText.textContent = listenMode === 'standby' ? 'CHỜ GỌI "TỬ UYÊN ƠI"' : 'ĐANG CHỜ ANH NÓI (15 GIÂY)';
+            };
+            recognition.onspeechstart = () => {
+                if (listenMode !== 'followup' || isBusy) return;
+                speechInProgress = true;
+                followupDeadline = 0;
+                if (followupTimer) clearTimeout(followupTimer);
+                followupTimer = null;
+                statusText.textContent = 'ĐANG NGHE ANH NÓI — KHÔNG GIỚI HẠN 15 GIÂY';
+            };
+            recognition.onspeechend = () => {
+                if (listenMode !== 'followup' || isBusy) return;
+                speechInProgress = false;
+                // Let Web Speech deliver the final transcript after natural speech end.
+                armFollowupIdleTimer();
+                statusText.textContent = 'ĐANG XỬ LÝ LỜI NÓI…';
             };
             recognition.onresult = (event) => {
                 if (listenMode === 'off' || isBusy) return;
@@ -841,6 +868,12 @@
                 isListening = false;
                 micBtn.classList.remove('active');
                 if (listenMode === 'off' || isBusy || document.visibilityState !== 'visible') return;
+                // If the browser ends a recognition session without a final result,
+                // re-arm an idle window rather than discarding a long utterance.
+                if (speechInProgress) {
+                    speechInProgress = false;
+                    armFollowupIdleTimer();
+                }
                 if (listenDeadlineReached()) {
                     shutdownRecognition();
                     statusText.textContent = 'NGHỈ — CHẠM MIC ĐỂ TRÒ CHUYỆN';
