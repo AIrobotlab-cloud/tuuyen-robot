@@ -187,6 +187,7 @@
         </div>
         <div class="control-group">
             <select class="select-btn" id="voice-select">
+                <option value="google_local">📱 Google tiếng Việt (trên điện thoại)</option>
                 <option value="nam_minh">🎙️ Nam Minh (Trầm Binh Gia)</option>
                 <option value="elevenlabs_test">🧪 ElevenLabs Flash (thử nghiệm)</option>
                 <option value="vip_taothao">👑 VIP Tào Tháo (Bá Nghị)</option>
@@ -210,6 +211,11 @@
         </div>
     </div>
 
+    <div id="mobile-reply" aria-live="polite" style="display:none;position:relative;width:min(94vw,600px);max-height:16vh;overflow:auto;padding:8px 12px;border:1px solid #1e40af;border-radius:10px;background:#0f172a;font-size:13px;line-height:1.4;color:#e2e8f0;user-select:text"></div>
+    <div id="voice-action-bar" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:6px auto 10px">
+        <button type="button" id="voice-stop" style="border-radius:9px;padding:9px 14px;background:#26354e;color:#fff;border:1px solid #55708b">■ Dừng đọc</button>
+        <button type="button" id="voice-replay" style="border-radius:9px;padding:9px 14px;background:#164e63;color:#fff;border:1px solid #4b9db0">↻ Đọc lại</button>
+    </div>
     <div class="controls">
         <button class="mic-btn" id="mic-btn" onclick="toggleVoiceSession()">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -361,6 +367,135 @@
         let audioWatchdog = null;
         let audioProgressWatchdog = null;
         let voiceErrorCode = '';
+        // TY-VOICE MOBILE 3.0.1: single active request + explicit speech controls.
+        let responseEpoch = 0;
+        let activeChatController = null;
+        let localSpeechRun = 0;
+        let localSpeechTimeout = null;
+        let localSpeechStarted = false;
+        let lastReply = '';
+        let lastReplyVoice = null;
+        const mobileReply = document.getElementById('mobile-reply');
+        const voiceStopBtn = document.getElementById('voice-stop');
+        const voiceReplayBtn = document.getElementById('voice-replay');
+        const localTtsSupported = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+        let localVietnameseVoice = null;
+        function updateLocalVoices() {
+            if (!localTtsSupported) return;
+            const voices = window.speechSynthesis.getVoices() || [];
+            localVietnameseVoice = voices.find(v => /^vi[-_]/i.test(v.lang)) || null;
+        }
+        if (localTtsSupported) {
+            updateLocalVoices();
+            window.speechSynthesis.addEventListener('voiceschanged', updateLocalVoices);
+        }
+        function stopLocalSpeech() {
+            localSpeechRun++;
+            localSpeechStarted = false;
+            if (localSpeechTimeout) clearTimeout(localSpeechTimeout);
+            localSpeechTimeout = null;
+            if (localTtsSupported) { try { window.speechSynthesis.cancel(); } catch (_) {} }
+        }
+        function stopAllPlayback() {
+            stopLocalSpeech();
+            audioSession++;
+            resetAudioElement();
+            isBusy = false;
+            isListening = false;
+            setRobotState('idle');
+        }
+        function invalidatePendingReply() {
+            responseEpoch++;
+            if (activeChatController) {
+                activeChatController.abort();
+                activeChatController = null;
+            }
+        }
+        function displayReply(text, mode) {
+            lastReply = typeof text === 'string' ? text : '';
+            lastReplyVoice = mode;
+            mobileReply.textContent = lastReply;
+            mobileReply.style.display = lastReply ? 'block' : 'none';
+        }
+        function speakWithAndroid(text) {
+            stopLocalSpeech();
+            if (!localTtsSupported) {
+                isBusy = false;
+                reportVoiceError('GOOGLE_TTS_UNAVAILABLE');
+                return;
+            }
+            updateLocalVoices();
+            const run = localSpeechRun;
+            const clean = String(text || '').replace(/[*#`]/g, '').trim();
+            if (!clean) { isBusy = false; reportVoiceError('EMPTY_REPLY'); return; }
+            const utterance = new SpeechSynthesisUtterance(clean);
+            utterance.lang = 'vi-VN';
+            if (localVietnameseVoice) utterance.voice = localVietnameseVoice;
+            utterance.rate = 1.0;
+            utterance.pitch = 1.0;
+            localSpeechStarted = false;
+            const finished = () => {
+                if (run !== localSpeechRun) return;
+                if (localSpeechTimeout) clearTimeout(localSpeechTimeout);
+                localSpeechTimeout = null;
+                isBusy = false;
+                isListening = false;
+                setRobotState('idle');
+                // No automatic microphone activation; prevents feedback from speaker.
+            };
+            utterance.onstart = () => {
+                if (run !== localSpeechRun) return;
+                localSpeechStarted = true;
+                if (localSpeechTimeout) clearTimeout(localSpeechTimeout);
+                localSpeechTimeout = null;
+                setRobotState('speaking');
+            };
+            utterance.onend = finished;
+            utterance.onerror = e => {
+                if (run !== localSpeechRun) return;
+                console.warn('[TY-GOOGLE-TTS] error', e.error);
+                finished();
+                statusText.textContent = 'GIỌNG GOOGLE GIÁN ĐOẠN — NHẤN ĐỌC LẠI';
+            };
+            try {
+                window.speechSynthesis.speak(utterance);
+                // Detect failure to START only, never treat natural pauses as failure.
+                localSpeechTimeout = setTimeout(() => {
+                    if (run === localSpeechRun && !localSpeechStarted) {
+                        stopLocalSpeech();
+                        isBusy = false;
+                        setRobotState('idle');
+                        statusText.textContent = 'GOOGLE TTS KHÔNG BẮT ĐẦU — NHẤN ĐỌC LẠI';
+                    }
+                }, 12000);
+            } catch (e) {
+                console.warn('[TY-GOOGLE-TTS] exception', e.name);
+                finished();
+                reportVoiceError('GOOGLE_TTS_ERROR');
+            }
+        }
+        voiceStopBtn.addEventListener('click', () => {
+            // Stop both playback and an in-flight AI reply so old audio cannot restart.
+            invalidatePendingReply();
+            stopAllPlayback();
+            statusText.textContent = 'ĐÃ DỪNG ĐỌC';
+        });
+        voiceReplayBtn.addEventListener('click', () => {
+            if (!lastReply || lastReplyVoice !== 'google_local') {
+                statusText.textContent = 'CHỈ ĐỌC LẠI ĐƯỢC CÂU TRẢ LỜI GOOGLE GẦN NHẤT';
+                return;
+            }
+            if (document.visibilityState !== 'visible') return;
+            audioSession++;
+            resetAudioElement();
+            isBusy = true;
+            speakWithAndroid(lastReply);
+        });
+        voiceSelect.addEventListener('change', () => {
+            invalidatePendingReply();
+            stopAllPlayback();
+            statusText.textContent = 'ĐÃ CHUYỂN GIỌNG — SẴN SÀNG';
+        });
 
         // 1. GIỮ MÀN HÌNH ĐIỆN THOẠI LUÔN SÁNG
         async function requestWakeLock() {
@@ -371,7 +506,15 @@
             } catch (err) { }
         }
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') requestWakeLock();
+            if (document.visibilityState === 'visible') {
+                requestWakeLock();
+            } else {
+                // Android may suspend Web Speech when hidden; never claim it kept playing.
+                if (localTtsSupported && (window.speechSynthesis.speaking || window.speechSynthesis.pending)) {
+                    stopAllPlayback();
+                    statusText.textContent = 'CHUYỂN NỀN — NHẤN ĐỌC LẠI KHI QUAY VỀ';
+                }
+            }
         });
         document.addEventListener('touchstart', () => { requestWakeLock(); }, { passive: true });
 
@@ -656,11 +799,7 @@
             requestWakeLock();
 
             if (body.classList.contains('state-speaking')) {
-                audioSession += 1;
-                resetAudioElement();
-                isBusy = false;
-                setRobotState('idle');
-                startMicClean();
+                stopAllPlayback();
                 return;
             }
 
@@ -687,17 +826,24 @@
                 return;
             }
 
+            invalidatePendingReply();
+            stopAllPlayback();
+            const epoch = responseEpoch;
+            const voiceForRequest = voiceSelect.value;
+            const controller = new AbortController();
+            activeChatController = controller;
             isBusy = true;
             setRobotState('thinking');
 
             try {
                 const response = await fetch('/api/chat', {
+                    signal: controller.signal,
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', ...authHeaders() },
                     body: JSON.stringify({ 
                         message: query.trim(), 
                         model: currentModel,
-                        voice: voiceSelect.value 
+                        voice: voiceForRequest 
                     })
                 });
 
@@ -709,19 +855,28 @@
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const data = await response.json();
+                if (epoch !== responseEpoch || controller.signal.aborted) return;
+                activeChatController = null;
 
                 // Cập nhật lại điểm EXP và tiến độ nhiệm vụ trên huy hiệu sau mỗi câu trả lời
                 loadRpgStatus();
 
-                if (data.audio) {
+                displayReply(data.reply, voiceForRequest);
+                if (voiceForRequest === 'google_local') {
+                    speakWithAndroid(data.reply);
+                } else if (data.audio) {
                     playReplyAudio(data.audio);
                 } else {
+                    // Keep text visible even if Edge TTS fails.
                     reportVoiceError('SERVER_NO_AUDIO');
                 }
 
             } catch (err) {
+                if (epoch !== responseEpoch || (err && err.name === 'AbortError')) return;
                 console.warn('[TU-VOICE] chat request failed:', err && err.name);
                 reportVoiceError('CHAT_REQUEST');
+            } finally {
+                if (activeChatController === controller) activeChatController = null;
             }
         }
     </script>

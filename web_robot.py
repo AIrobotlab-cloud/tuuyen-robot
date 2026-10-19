@@ -812,7 +812,7 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
             if selected_model not in ("gpt-4o", "gpt-4o-mini"):
                 self._deny(400, "Invalid model")
                 return
-            if selected_voice not in ("nam_minh", "hoai_my", "vip_taothao", "elevenlabs_test"):
+            if selected_voice not in ("nam_minh", "hoai_my", "vip_taothao", "elevenlabs_test", "google_local"):
                 self._deny(400, "Invalid voice")
                 return
 
@@ -959,13 +959,16 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 logger.info("[TY-DIAG] TTS_START voice=%s", selected_voice)
                 audio_b64 = None
                 try:
-                    if selected_voice == "vip_taothao":
+                    if selected_voice == "google_local":
+                        # Android browser uses speechSynthesis; no Edge TTS or paid fallback.
+                        pass
+                    elif selected_voice == "vip_taothao":
                         audio_b64 = generate_fish_audio(reply_text)
                     elif selected_voice == "elevenlabs_test":
                         audio_b64 = generate_elevenlabs_audio(reply_text)
 
                     # Never silently fall back to paid ElevenLabs.
-                    if not audio_b64 and selected_voice != "elevenlabs_test":
+                    if not audio_b64 and selected_voice not in ("elevenlabs_test", "google_local"):
                         voice_fallback = selected_voice if selected_voice in FREE_VOICES else "nam_minh"
                         loop = asyncio.new_event_loop()
                         try:
