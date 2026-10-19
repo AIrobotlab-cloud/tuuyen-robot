@@ -386,6 +386,9 @@
         let followupDeadline = 0;
         let followupTimer = null;
         let recognitionRetry = null;
+        let recognitionHeartbeat = null;
+        let recognizerStartAt = 0;
+        let followupEverStarted = false;
         let recognizerActive = false;
         let recognizerStarting = false;
         let recognitionHadResult = false;
@@ -400,14 +403,18 @@
         function cancelListenTimers() {
             if (followupTimer) clearTimeout(followupTimer);
             if (recognitionRetry) clearTimeout(recognitionRetry);
+            if (recognitionHeartbeat) clearInterval(recognitionHeartbeat);
             followupTimer = null;
             recognitionRetry = null;
+            recognitionHeartbeat = null;
         }
         function shutdownRecognition() {
             cancelListenTimers();
             listenMode = 'off';
             followupDeadline = 0;
             isListening = false;
+            recognizerStarting = false;
+            recognizerStartAt = 0;
             micBtn.classList.remove('active');
             updateStandbyButton();
             if (recognition) { try { recognition.abort(); } catch (_) {} }
@@ -423,6 +430,26 @@
         function listenDeadlineReached() {
             return listenMode === 'followup' && Date.now() >= followupDeadline;
         }
+        // A single delayed recognition.start() is unreliable immediately after
+        // Android finishes TTS/aborts an older recognition session. Keep a
+        // bounded re-arm heartbeat during the active listening window.
+        function startRecognitionHeartbeat() {
+            if (recognitionHeartbeat) clearInterval(recognitionHeartbeat);
+            recognitionHeartbeat = setInterval(() => {
+                if (listenMode === 'off' || isBusy || document.visibilityState !== 'visible') return;
+                if (listenDeadlineReached()) return;
+                if (recognizerStarting && Date.now() - recognizerStartAt > 3200) {
+                    // Chrome never emitted onstart/onend; recover instead of
+                    // silently claiming the microphone is listening.
+                    recognizerStarting = false;
+                    recognizerStartAt = 0;
+                    try { recognition.abort(); } catch (_) {}
+                    statusText.textContent = 'ĐANG KẾT NỐI LẠI MICROPHONE…';
+                    return;
+                }
+                if (!recognizerActive && !recognizerStarting) startMicClean();
+            }, 650);
+        }
         function beginFollowupListening() {
             if (!recognition || document.visibilityState !== 'visible' || (authRequired && !founderToken)) {
                 shutdownRecognition();
@@ -430,15 +457,18 @@
             }
             shutdownRecognition();
             listenMode = 'followup';
+            followupEverStarted = false;
             followupDeadline = Date.now() + FOLLOWUP_MS;
             followupTimer = setTimeout(() => {
                 if (listenMode === 'followup' && !isBusy) {
+                    const wasListening = followupEverStarted;
                     shutdownRecognition();
-                    statusText.textContent = 'NGHỈ — CHẠM MIC ĐỂ TRÒ CHUYỆN';
+                    statusText.textContent = wasListening ? 'NGHỈ — CHẠM MIC ĐỂ TRÒ CHUYỆN' : 'MIC CHƯA BẬT ĐƯỢC — CHẠM MIC ĐỂ THỬ LẠI';
                 }
             }, FOLLOWUP_MS);
             // Wait for the loudspeaker to finish completely before enabling input.
-            statusText.textContent = 'CHỜ NGHE 15 GIÂY';
+            statusText.textContent = 'ĐANG MỞ MICROPHONE — CHỜ…';
+            startRecognitionHeartbeat();
             scheduleRecognitionRetry(650);
         }
         function armStandby() {
@@ -450,7 +480,8 @@
             shutdownRecognition();
             listenMode = 'standby';
             updateStandbyButton();
-            statusText.textContent = 'CHỜ GỌI "TỬ UYÊN ƠI" — MIC ĐANG BẬT';
+            statusText.textContent = 'ĐANG MỞ MICROPHONE ĐỂ CHỜ GỌI…';
+            startRecognitionHeartbeat();
             scheduleRecognitionRetry(200);
         }
         // Only normalized exact short commands are treated as controls.
@@ -753,6 +784,7 @@
 
             recognition.onstart = () => {
                 recognizerStarting = false;
+                recognizerStartAt = 0;
                 recognizerActive = true;
                 recognitionHadResult = false;
                 recognitionRestartFailures = 0;
@@ -761,6 +793,7 @@
                     return;
                 }
                 isListening = true;
+                if (listenMode === 'followup') followupEverStarted = true;
                 micBtn.classList.add('active');
                 setRobotState('listening');
                 statusText.textContent = listenMode === 'standby' ? 'CHỜ GỌI "TỬ UYÊN ƠI"' : 'ĐANG LẮNG NGHE (15 GIÂY)';
@@ -790,6 +823,8 @@
                 handleUserSpeech(spoken);
             };
             recognition.onerror = (event) => {
+                recognizerStarting = false;
+                recognizerStartAt = 0;
                 const code = event && event.error;
                 if (code === 'not-allowed' || code === 'service-not-allowed' || code === 'audio-capture') {
                     shutdownRecognition();
@@ -802,6 +837,7 @@
             recognition.onend = () => {
                 recognizerActive = false;
                 recognizerStarting = false;
+                recognizerStartAt = 0;
                 isListening = false;
                 micBtn.classList.remove('active');
                 if (listenMode === 'off' || isBusy || document.visibilityState !== 'visible') return;
@@ -827,9 +863,11 @@
             if (listenDeadlineReached()) { shutdownRecognition(); return; }
             try {
                 recognizerStarting = true;
+                recognizerStartAt = Date.now();
                 recognition.start();
             } catch (e) {
                 recognizerStarting = false;
+                recognizerStartAt = 0;
                 if (listenMode !== 'off' && !recognizerActive) scheduleRecognitionRetry(700);
             }
         }
