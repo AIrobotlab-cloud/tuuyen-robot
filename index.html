@@ -215,6 +215,7 @@
     <div id="voice-action-bar" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:6px auto 10px">
         <button type="button" id="voice-stop" style="border-radius:9px;padding:9px 14px;background:#26354e;color:#fff;border:1px solid #55708b">■ Dừng đọc</button>
         <button type="button" id="voice-replay" style="border-radius:9px;padding:9px 14px;background:#164e63;color:#fff;border:1px solid #4b9db0">↻ Đọc lại</button>
+        <button type="button" id="voice-standby" aria-pressed="false" style="border-radius:9px;padding:9px 14px;background:#334155;color:#fff;border:1px solid #55708b">◉ Chờ gọi: TẮT</button>
     </div>
     <div class="controls">
         <button class="mic-btn" id="mic-btn" onclick="toggleVoiceSession()">
@@ -378,6 +379,97 @@
         const mobileReply = document.getElementById('mobile-reply');
         const voiceStopBtn = document.getElementById('voice-stop');
         const voiceReplayBtn = document.getElementById('voice-replay');
+        const standbyBtn = document.getElementById('voice-standby');
+        // 3.0.2 — session policy. "off" truly disables the microphone.
+        // Chrome cannot wake by voice from "off"; opt-in "standby" leaves recognition armed.
+        let listenMode = 'off'; // off | followup | standby
+        let followupDeadline = 0;
+        let followupTimer = null;
+        let recognitionRetry = null;
+        let recognizerActive = false;
+        let recognizerStarting = false;
+        let recognitionHadResult = false;
+        let recognitionRestartFailures = 0;
+        const FOLLOWUP_MS = 15000;
+        const REARM_MS = 500;
+        function updateStandbyButton() {
+            standbyBtn.textContent = listenMode === 'standby' ? '◉ Chờ gọi: BẬT' : '◉ Chờ gọi: TẮT';
+            standbyBtn.setAttribute('aria-pressed', String(listenMode === 'standby'));
+            standbyBtn.style.borderColor = listenMode === 'standby' ? '#10b981' : '#55708b';
+        }
+        function cancelListenTimers() {
+            if (followupTimer) clearTimeout(followupTimer);
+            if (recognitionRetry) clearTimeout(recognitionRetry);
+            followupTimer = null;
+            recognitionRetry = null;
+        }
+        function shutdownRecognition() {
+            cancelListenTimers();
+            listenMode = 'off';
+            followupDeadline = 0;
+            isListening = false;
+            micBtn.classList.remove('active');
+            updateStandbyButton();
+            if (recognition) { try { recognition.abort(); } catch (_) {} }
+            if (!isBusy) setRobotState('idle');
+        }
+        function scheduleRecognitionRetry(delay = REARM_MS) {
+            if (recognitionRetry) clearTimeout(recognitionRetry);
+            recognitionRetry = setTimeout(() => {
+                recognitionRetry = null;
+                startMicClean();
+            }, delay);
+        }
+        function listenDeadlineReached() {
+            return listenMode === 'followup' && Date.now() >= followupDeadline;
+        }
+        function beginFollowupListening() {
+            if (!recognition || document.visibilityState !== 'visible' || (authRequired && !founderToken)) {
+                shutdownRecognition();
+                return;
+            }
+            shutdownRecognition();
+            listenMode = 'followup';
+            followupDeadline = Date.now() + FOLLOWUP_MS;
+            followupTimer = setTimeout(() => {
+                if (listenMode === 'followup' && !isBusy) {
+                    shutdownRecognition();
+                    statusText.textContent = 'NGHỈ — CHẠM MIC ĐỂ TRÒ CHUYỆN';
+                }
+            }, FOLLOWUP_MS);
+            // Wait for the loudspeaker to finish completely before enabling input.
+            statusText.textContent = 'CHỜ NGHE 15 GIÂY';
+            scheduleRecognitionRetry(650);
+        }
+        function armStandby() {
+            if (!recognition || (authRequired && !founderToken)) {
+                statusText.textContent = 'CẦN ĐĂNG NHẬP VÀ QUYỀN MICROPHONE';
+                return;
+            }
+            if (document.visibilityState !== 'visible') return;
+            shutdownRecognition();
+            listenMode = 'standby';
+            updateStandbyButton();
+            statusText.textContent = 'CHỜ GỌI "TỬ UYÊN ƠI" — MIC ĐANG BẬT';
+            scheduleRecognitionRetry(200);
+        }
+        // Only normalized exact short commands are treated as controls.
+        function normalizeSpoken(text) {
+            return String(text || '').toLowerCase().normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd')
+                .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+        function isSleepCommand(text) {
+            return /^(tu uyen\s+)?(ngu di|nghi di|vao che do nghi|dung lang nghe|tat micro|tam biet)(\s+tu uyen)?$/.test(normalizeSpoken(text));
+        }
+        function isWakeCommand(text) {
+            return /^(tu uyen oi|tu uyen|tu uyen thuc day|tu uyen bat dau|tu uyen noi chuyen|thuc day tu uyen)$/.test(normalizeSpoken(text));
+        }
+        standbyBtn.addEventListener('click', () => {
+            requestWakeLock();
+            if (listenMode === 'standby') { shutdownRecognition(); statusText.textContent = 'NGHỈ — CHỜ GỌI ĐÃ TẮT'; }
+            else { invalidatePendingReply(); stopAllPlayback(); armStandby(); }
+        });
         const localTtsSupported = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
         let localVietnameseVoice = null;
         function updateLocalVoices() {
@@ -397,6 +489,7 @@
             if (localTtsSupported) { try { window.speechSynthesis.cancel(); } catch (_) {} }
         }
         function stopAllPlayback() {
+            shutdownRecognition();
             stopLocalSpeech();
             audioSession++;
             resetAudioElement();
@@ -441,7 +534,7 @@
                 isBusy = false;
                 isListening = false;
                 setRobotState('idle');
-                // No automatic microphone activation; prevents feedback from speaker.
+                beginFollowupListening(); // Microphone re-opens only AFTER TTS ends.
             };
             utterance.onstart = () => {
                 if (run !== localSpeechRun) return;
@@ -510,6 +603,7 @@
                 requestWakeLock();
             } else {
                 // Android may suspend Web Speech when hidden; never claim it kept playing.
+                shutdownRecognition(); // No hidden-page continuous listening.
                 if (localTtsSupported && (window.speechSynthesis.speaking || window.speechSynthesis.pending)) {
                     stopAllPlayback();
                     statusText.textContent = 'CHUYỂN NỀN — NHẤN ĐỌC LẠI KHI QUAY VỀ';
@@ -658,43 +752,85 @@
             recognition.interimResults = false;
 
             recognition.onstart = () => {
+                recognizerStarting = false;
+                recognizerActive = true;
+                recognitionHadResult = false;
+                recognitionRestartFailures = 0;
+                if (listenMode === 'off' || isBusy || document.visibilityState !== 'visible') {
+                    try { recognition.abort(); } catch (_) {}
+                    return;
+                }
                 isListening = true;
                 micBtn.classList.add('active');
                 setRobotState('listening');
+                statusText.textContent = listenMode === 'standby' ? 'CHỜ GỌI "TỬ UYÊN ƠI"' : 'ĐANG LẮNG NGHE (15 GIÂY)';
             };
-
             recognition.onresult = (event) => {
+                if (listenMode === 'off' || isBusy) return;
                 const lastIdx = event.results.length - 1;
-                const userQuery = event.results[lastIdx][0].transcript;
-                handleUserSpeech(userQuery);
+                const spoken = String(event.results[lastIdx][0].transcript || '').trim();
+                if (!spoken) return;
+                recognitionHadResult = true;
+                if (isSleepCommand(spoken)) {
+                    shutdownRecognition();
+                    statusText.textContent = 'TỬ UYÊN ĐÃ NGHỈ';
+                    return;
+                }
+                if (isWakeCommand(spoken)) {
+                    beginFollowupListening();
+                    statusText.textContent = 'TỬ UYÊN ĐÃ THỨC — MỜI ANH NÓI';
+                    return;
+                }
+                if (listenMode === 'standby') {
+                    // Never send ambient speech to the AI when only waiting for the name.
+                    statusText.textContent = 'ĐANG CHỜ CÂU GỌI "TỬ UYÊN ƠI"';
+                    return;
+                }
+                shutdownRecognition();
+                handleUserSpeech(spoken);
             };
-
-            recognition.onerror = () => {
-                if (!isBusy) {
-                    isListening = false;
-                    micBtn.classList.remove('active');
-                    setRobotState('idle');
+            recognition.onerror = (event) => {
+                const code = event && event.error;
+                if (code === 'not-allowed' || code === 'service-not-allowed' || code === 'audio-capture') {
+                    shutdownRecognition();
+                    statusText.textContent = 'KHÔNG CÓ QUYỀN MICROPHONE — CHẠM ĐỂ THỬ LẠI';
+                } else if (code === 'network') {
+                    shutdownRecognition();
+                    statusText.textContent = 'NHẬN GIỌNG BỊ LỖI MẠNG — CHẠM MIC ĐỂ THỬ LẠI';
                 }
             };
-
             recognition.onend = () => {
-                if (!isBusy) {
-                    isListening = false;
-                    micBtn.classList.remove('active');
-                    setRobotState('idle');
+                recognizerActive = false;
+                recognizerStarting = false;
+                isListening = false;
+                micBtn.classList.remove('active');
+                if (listenMode === 'off' || isBusy || document.visibilityState !== 'visible') return;
+                if (listenDeadlineReached()) {
+                    shutdownRecognition();
+                    statusText.textContent = 'NGHỈ — CHẠM MIC ĐỂ TRÒ CHUYỆN';
+                    return;
                 }
+                // Android Chrome typically ends speech recognition after a short silence.
+                // Re-arm within the 15-second window; opt-in standby can re-arm longer.
+                if (++recognitionRestartFailures > 18) {
+                    shutdownRecognition();
+                    statusText.textContent = 'MIC TẠM DỪNG — CHẠM ĐỂ BẬT LẠI';
+                    return;
+                }
+                scheduleRecognitionRetry(REARM_MS);
             };
         }
 
         function startMicClean() {
-            if (!recognition || isBusy) return;
+            if (!recognition || isBusy || listenMode === 'off' || recognizerActive || recognizerStarting) return;
+            if (document.visibilityState !== 'visible' || (authRequired && !founderToken)) return;
+            if (listenDeadlineReached()) { shutdownRecognition(); return; }
             try {
+                recognizerStarting = true;
                 recognition.start();
             } catch (e) {
-                try {
-                    recognition.stop();
-                    setTimeout(() => { recognition.start(); }, 200);
-                } catch (err) {}
+                recognizerStarting = false;
+                if (listenMode !== 'off' && !recognizerActive) scheduleRecognitionRetry(700);
             }
         }
 
@@ -745,7 +881,7 @@
                 resetAudioElement();
                 isBusy = false;
                 setRobotState('idle');
-                setTimeout(startMicClean, 600);
+                beginFollowupListening();
             };
             const fail = (code) => {
                 if (!isCurrent()) return;
@@ -805,14 +941,8 @@
 
             if (!recognition) return;
 
-            if (!isListening) {
-                startMicClean();
-            } else {
-                isListening = false;
-                micBtn.classList.remove('active');
-                try { recognition.stop(); } catch (e) {}
-                setRobotState('idle');
-            }
+            if (listenMode === 'off') beginFollowupListening();
+            else { shutdownRecognition(); statusText.textContent = 'NGHỈ — MICROPHONE ĐÃ TẮT'; }
         }
 
         // 4. XỬ LÝ CÂU HỎI VÀ PHÁT ÂM THANH TRẢ LỜI (GIỮ NGUYÊN 100% V3.7)
