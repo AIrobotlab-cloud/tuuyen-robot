@@ -393,6 +393,10 @@
         let recognizerActive = false;
         let recognizerStarting = false;
         let recognitionHadResult = false;
+        let interimTranscript = '';
+        let recognitionSpeechSeen = false;
+        // Diagnostic event names only; do not log spoken content.
+        function voiceTrace(name, detail='') { console.info('[TY-VOICE-TRACE]', name, detail, 'mode='+listenMode); }
         let recognitionRestartFailures = 0;
         const FOLLOWUP_MS = 15000;
         const REARM_MS = 500;
@@ -414,6 +418,8 @@
             listenMode = 'off';
             followupDeadline = 0;
             speechInProgress = false;
+            interimTranscript = '';
+            recognitionSpeechSeen = false;
             isListening = false;
             recognizerStarting = false;
             recognizerStartAt = 0;
@@ -469,6 +475,7 @@
             }, 650);
         }
         function beginFollowupListening() {
+            interruptedBox.style.display = 'none';
             if (!recognition || document.visibilityState !== 'visible' || (authRequired && !founderToken)) {
                 shutdownRecognition();
                 return;
@@ -786,20 +793,45 @@
         // Tải huy hiệu RPG ngay khi mở trang
         // Auth success will load RPG data.
 
+        // TY-VOICE 3.0.6: safe recovery when Chrome drops a long utterance.
+        // Never auto-send incomplete words to the AI as if they were complete.
+        const interruptedBox = document.createElement('div');
+        interruptedBox.style.cssText = 'display:none;width:min(94vw,600px);margin:4px auto;padding:10px;background:#1e293b;border:1px solid #f59e0b;border-radius:10px;color:#f8fafc;font-size:13px';
+        const interruptedText = document.createElement('div');
+        interruptedText.style.cssText = 'white-space:pre-wrap;user-select:text;margin:6px 0';
+        const interruptedSend = document.createElement('button');
+        interruptedSend.textContent = 'Gửi phần lời đã nhận';
+        interruptedSend.style.cssText = 'padding:8px;border:1px solid #f59e0b;border-radius:8px;background:#92400e;color:white';
+        interruptedBox.append('Chrome ngắt nhận giọng trước khi trả kết quả cuối. Phần tạm ghi được (có thể thiếu):', interruptedText, interruptedSend);
+        document.getElementById('voice-action-bar').after(interruptedBox);
+        function showInterruptedTranscript(text) {
+            interruptedText.textContent = text;
+            interruptedBox.style.display = 'block';
+            statusText.textContent = 'NHẬN GIỌNG BỊ NGẮT — CÓ PHẦN LỜI TẠM';
+        }
+        interruptedSend.addEventListener('click', () => {
+            const text = interruptedText.textContent.trim();
+            interruptedBox.style.display = 'none';
+            if (text) handleUserSpeech(text);
+        });
+
         // 3. KHỞI TẠO NHẬN DIỆN GIỌNG NÓI ĐƠN PHIÊN CHUẨN XÁC CỦA BẢN V3.7
         if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
             const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
             recognition = new SpeechRec();
             recognition.lang = 'vi-VN';
             recognition.continuous = false;
-            recognition.interimResults = false;
+            recognition.interimResults = true; // Preserve partial speech evidence before Chrome ends a session.
 
             recognition.onstart = () => {
                 recognizerStarting = false;
                 recognizerStartAt = 0;
                 recognizerActive = true;
                 recognitionHadResult = false;
+                interimTranscript = '';
+                recognitionSpeechSeen = false;
                 recognitionRestartFailures = 0;
+                voiceTrace('start');
                 if (listenMode === 'off' || isBusy || document.visibilityState !== 'visible') {
                     try { recognition.abort(); } catch (_) {}
                     return;
@@ -813,6 +845,8 @@
             recognition.onspeechstart = () => {
                 if (listenMode !== 'followup' || isBusy) return;
                 speechInProgress = true;
+                recognitionSpeechSeen = true;
+                voiceTrace('speechstart');
                 followupDeadline = 0;
                 if (followupTimer) clearTimeout(followupTimer);
                 followupTimer = null;
@@ -820,17 +854,30 @@
             };
             recognition.onspeechend = () => {
                 if (listenMode !== 'followup' || isBusy) return;
-                speechInProgress = false;
-                // Let Web Speech deliver the final transcript after natural speech end.
-                armFollowupIdleTimer();
-                statusText.textContent = 'ĐANG XỬ LÝ LỜI NÓI…';
+                // Speech ended, but final transcript may still be pending.
+                // DO NOT re-arm the 15s idle timer until recognition.onend.
+                voiceTrace('speechend');
+                statusText.textContent = 'ĐANG CHỜ KẾT QUẢ NHẬN GIỌNG…';
             };
             recognition.onresult = (event) => {
                 if (listenMode === 'off' || isBusy) return;
                 const lastIdx = event.results.length - 1;
-                const spoken = String(event.results[lastIdx][0].transcript || '').trim();
+                const item = event.results[lastIdx];
+                const spoken = String(item[0].transcript || '').trim();
                 if (!spoken) return;
+                recognitionSpeechSeen = true;
+                speechInProgress = true;
+                followupDeadline = 0;
+                if (followupTimer) clearTimeout(followupTimer);
+                followupTimer = null;
+                if (!item.isFinal) {
+                    interimTranscript = spoken;
+                    statusText.textContent = 'ĐANG NHẬN LỜI NÓI — KHÔNG ĐẾM 15 GIÂY';
+                    return;
+                }
                 recognitionHadResult = true;
+                interimTranscript = '';
+                voiceTrace('final-result');
                 if (isSleepCommand(spoken)) {
                     shutdownRecognition();
                     statusText.textContent = 'TỬ UYÊN ĐÃ NGHỈ';
@@ -853,6 +900,7 @@
                 recognizerStarting = false;
                 recognizerStartAt = 0;
                 const code = event && event.error;
+                voiceTrace('error', code || 'unknown');
                 if (code === 'not-allowed' || code === 'service-not-allowed' || code === 'audio-capture') {
                     shutdownRecognition();
                     statusText.textContent = 'KHÔNG CÓ QUYỀN MICROPHONE — CHẠM ĐỂ THỬ LẠI';
@@ -868,8 +916,20 @@
                 isListening = false;
                 micBtn.classList.remove('active');
                 if (listenMode === 'off' || isBusy || document.visibilityState !== 'visible') return;
-                // If the browser ends a recognition session without a final result,
-                // re-arm an idle window rather than discarding a long utterance.
+                voiceTrace('end', recognitionHadResult ? 'final' : (interimTranscript ? 'interim-only' : 'no-transcript'));
+                // The browser may end long speech without a final transcript.
+                // Preserve the interim instead of silently discarding it or claiming silence.
+                if (listenMode === 'followup' && !recognitionHadResult && interimTranscript) {
+                    const recovered = interimTranscript;
+                    speechInProgress = false;
+                    followupDeadline = 0;
+                    cancelListenTimers();
+                    listenMode = 'off';
+                    updateStandbyButton();
+                    setRobotState('idle');
+                    showInterruptedTranscript(recovered);
+                    return;
+                }
                 if (speechInProgress) {
                     speechInProgress = false;
                     armFollowupIdleTimer();
