@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parent
 ASSETS = {
     '/': ('index.html', 'text/html; charset=utf-8'),
     '/index.html': ('index.html', 'text/html; charset=utf-8'),
+    '/virtual': ('virtual.html', 'text/html; charset=utf-8'),
+    '/virtual.html': ('virtual.html', 'text/html; charset=utf-8'),
     '/manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json'),
     '/icon-192.png': ('icon-192.png', 'image/png'),
     '/icon-512.png': ('icon-512.png', 'image/png'),
