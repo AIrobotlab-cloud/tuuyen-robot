@@ -13,6 +13,9 @@ ASSETS = {
     '/manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json'),
     '/icon-192.png': ('icon-192.png', 'image/png'),
     '/icon-512.png': ('icon-512.png', 'image/png'),
+     '/avatar-rest-full.png': ('avatar-rest-full.png', 'image/png'),
+    '/avatar-chat-half.png': ('avatar-chat-half.png', 'image/png'),
+  
 }
 
 class PreviewHandler(BaseHTTPRequestHandler):
