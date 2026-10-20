@@ -830,50 +830,38 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_GET(self):
-        
-        # TY-VIRTUAL V1.0 — PWA static assets
-        pwa_assets = {
-            "/manifest.webmanifest": (
-                "manifest.webmanifest",
-                "application/manifest+json"
-            ),
-            "/icon-192.png": (
-                "icon-192.png",
-                "image/png"
-            ),
-            "/icon-512.png": (
-                "icon-512.png",
-                "image/png"
-            ),
+    # TY-VIRTUAL V1.3: only approved public PWA/avatar assets.
+    # Never expose the working directory via SimpleHTTPRequestHandler.
+    def _serve_virtual_asset(self, path):
+        assets = {
+            "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json; charset=utf-8"),
+            "/icon-192.png": ("icon-192.png", "image/png"),
+            "/icon-512.png": ("icon-512.png", "image/png"),
+            "/avatar-rest-full.png": ("avatar-rest-full.png", "image/png"),
+            "/avatar-chat-half.png": ("avatar-chat-half.png", "image/png"),
         }
+        asset = assets.get(path)
+        if asset is None:
+            return False
+        filename, content_type = asset
+        try:
+            with open(filename, "rb") as stream:
+                content = stream.read()
+        except OSError:
+            self._deny(404, "Asset not found")
+            return True
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Cache-Control", "public, max-age=300")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(content)
+        return True
 
-        path = self.path.split("?", 1)[0]
-
-        if path in pwa_assets:
-            from pathlib import Path
-
-            filename, mime_type = pwa_assets[path]
-
-            try:
-                data = (
-                    Path(__file__).resolve().parent / filename
-                ).read_bytes()
-            except OSError:
-                self.send_error(404, "PWA asset not found")
-                return
-
-            self.send_response(200)
-            self.send_header("Content-Type", mime_type)
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header(
-                "X-Content-Type-Options", "nosniff"
-            )
-            self.end_headers()
-            self.wfile.write(data)
+    def do_GET(self):
+        if self._serve_virtual_asset(self.path.split("?", 1)[0]):
             return
-
         if self.path.split("?", 1)[0] == "/healthz":
             self.send_rpg_json({"ok": True, "service": "tuuyen-robot"})
             return
