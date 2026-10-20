@@ -188,9 +188,57 @@
         .auth-panel input { font-size:16px; padding:12px; border:1px solid #334155; border-radius:8px; background:#020617; color:#fff; }
         .auth-panel button { padding:12px; border:0; border-radius:8px; background:#0284c7; color:white; font-weight:700; }
         .auth-error { color:#fca5a5; font-size:13px; min-height:18px; }
-    </style>
+        
+/* TY-VIRTUAL V1.1 — Avatar Foundation */
+.avatar-stage {
+    position: relative;
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+
+.avatar-image {
+    position: absolute;
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+    transition: opacity 0.4s ease, transform 0.4s ease;
+    pointer-events: none;
+    user-select: none;
+}
+
+.avatar-image.active {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+
+.avatar-rest {
+    z-index: 1;
+}
+
+.avatar-chat {
+    z-index: 2;
+}
+
+
+.face-container {
+    display: none;
+}
+
+</style>
 </head>
 <body class="state-idle">
+ 
     <div class="top-bar">
         <div class="left-group">
             <div class="status-badge"><div class="dot"></div><span id="status-text">TRỰC GÁC</span></div>
@@ -207,6 +255,24 @@
             <button class="mode-toggle" id="mode-btn" onclick="toggleModelMode()">⚡ Huấn luyện (~2đ)</button>
         </div>
     </div>
+    
+<!-- TY-VIRTUAL V1.1 — Avatar Stage -->
+<div id="avatarStage" class="avatar-stage rest-mode">
+    <img
+        id="avatarRest"
+        class="avatar-image avatar-rest active"
+        src="/avatar-rest-full.png"
+        alt="Tử Uyên toàn thân khi nghỉ"
+    >
+    <img
+        id="avatarChat"
+        class="avatar-image avatar-chat"
+        src="/avatar-chat-half.png"
+        alt="Tử Uyên chân dung khi trò chuyện"
+    >
+</div>
+<!-- End TY-VIRTUAL Avatar Stage -->
+
 
     <div class="face-container">
         <div class="eyebrows-wrapper">
@@ -704,9 +770,27 @@
             setTimeout(triggerLookAround, Math.random() * 4000 + 3000);
         }
         triggerLookAround();
+        
+/* TY-VIRTUAL V1.1 — Avatar State Controller */
+function setAvatarMode(mode) {
+    const stage = document.getElementById('avatarStage');
+    const rest = document.getElementById('avatarRest');
+    const chat = document.getElementById('avatarChat');
+
+    if (!stage || !rest || !chat) return;
+
+    const isActive = mode === 'active';
+
+    stage.classList.toggle('active-mode', isActive);
+    stage.classList.toggle('rest-mode', !isActive);
+
+    rest.classList.toggle('active', !isActive);
+    chat.classList.toggle('active', isActive);
+}
 
         function setRobotState(state) {
             body.className = `state-${state}` + (currentAuraClass ? ` ${currentAuraClass}` : '');
+            setAvatarMode(state === 'idle' ? 'rest' : 'active');
             if (state === 'idle') {
                 pupilLeft.style.transform = 'translate(0, 0)';
                 pupilRight.style.transform = 'translate(0, 0)';
