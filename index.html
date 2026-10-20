@@ -235,6 +235,72 @@
     display: none;
 }
 
+/* TY-VIRTUAL V1.2 — Avatar Motion */
+
+/* Khi nghỉ: chuyển động rất nhẹ như đang thở */
+body.state-idle .avatar-rest.active {
+    animation: tyRestBreathing 5s ease-in-out infinite;
+}
+
+/* Khi lắng nghe: tập trung, tiến gần nhẹ */
+body.state-listening .avatar-chat.active {
+    animation: tyListening 3s ease-in-out infinite;
+}
+
+/* Khi suy nghĩ: trầm tĩnh, chuyển động chậm */
+body.state-thinking .avatar-chat.active {
+    animation: tyThinking 4s ease-in-out infinite;
+}
+
+/* Khi nói: chuyển động nhẹ, tránh rung giật */
+body.state-speaking .avatar-chat.active {
+    animation: tySpeaking 2.5s ease-in-out infinite;
+}
+
+@keyframes tyRestBreathing {
+    0%, 100% {
+        transform: translateY(0) scale(1);
+    }
+    50% {
+        transform: translateY(-3px) scale(1.012);
+    }
+}
+
+@keyframes tyListening {
+    0%, 100% {
+        transform: translateY(0) scale(1);
+    }
+    50% {
+        transform: translateY(-2px) scale(1.018);
+    }
+}
+
+@keyframes tyThinking {
+    0%, 100% {
+        transform: translateY(0) scale(1);
+    }
+    50% {
+        transform: translateY(2px) scale(1.008);
+    }
+}
+
+@keyframes tySpeaking {
+    0%, 100% {
+        transform: translateY(0) scale(1);
+    }
+    50% {
+        transform: translateY(-2px) scale(1.012);
+    }
+}
+
+/* Tôn trọng cài đặt giảm chuyển động của Android */
+@media (prefers-reduced-motion: reduce) {
+    .avatar-image {
+        animation: none !important;
+        transition: none !important;
+    }
+}
+
 </style>
 </head>
 <body class="state-idle">
