@@ -953,6 +953,25 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                     logger.exception("Public RPG endpoint failed")
                     self.send_rpg_json({"ok": False, "error": "RPG temporarily unavailable"}, 503)
             return
+        
+        if self.path.split("?", 1)[0] in ("/virtual", "/virtual.html"):
+            try:
+                with open("virtual.html", "rb") as f:
+                    page = f.read()
+            except OSError:
+                self._deny(503, "Virtual UI unavailable")
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(page)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(page)
+            return
+
+
 
         if self.path in ["/", "/index.html"] or self.path.startswith("/?"):
             self.send_response(200)
