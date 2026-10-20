@@ -831,6 +831,49 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        
+        # TY-VIRTUAL V1.0 — PWA static assets
+        pwa_assets = {
+            "/manifest.webmanifest": (
+                "manifest.webmanifest",
+                "application/manifest+json"
+            ),
+            "/icon-192.png": (
+                "icon-192.png",
+                "image/png"
+            ),
+            "/icon-512.png": (
+                "icon-512.png",
+                "image/png"
+            ),
+        }
+
+        path = self.path.split("?", 1)[0]
+
+        if path in pwa_assets:
+            from pathlib import Path
+
+            filename, mime_type = pwa_assets[path]
+
+            try:
+                data = (
+                    Path(__file__).resolve().parent / filename
+                ).read_bytes()
+            except OSError:
+                self.send_error(404, "PWA asset not found")
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", mime_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header(
+                "X-Content-Type-Options", "nosniff"
+            )
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
         if self.path.split("?", 1)[0] == "/healthz":
             self.send_rpg_json({"ok": True, "service": "tuuyen-robot"})
             return
