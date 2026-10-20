@@ -1,11 +1,11 @@
 
 {
-  "id": "/",
+  "id": "/virtual",
   "name": "Tử Uyên — Virtual Companion",
   "short_name": "Tử Uyên",
   "description": "Nhân vật AI đồng hành Tử Uyên",
   "lang": "vi",
-  "start_url": "/",
+  "start_url": "/virtual",
   "scope": "/",
   "display": "standalone",
   "background_color": "#020617",
