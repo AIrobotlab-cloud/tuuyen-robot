@@ -862,6 +862,24 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self._serve_virtual_asset(self.path.split("?", 1)[0]):
             return
+        # TY-VIRTUAL V1.3: second interface on the SAME backend and API origin.
+        # Cyber-Face at / remains unchanged; /virtual is an optional UI.
+        if self.path.split("?", 1)[0] in ("/virtual", "/virtual/"):
+            try:
+                with open("virtual.html", "rb") as stream:
+                    page = stream.read()
+            except OSError:
+                self._deny(404, "Virtual UI unavailable")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(page)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(page)
+            return
+
         if self.path.split("?", 1)[0] == "/healthz":
             self.send_rpg_json({"ok": True, "service": "tuuyen-robot"})
             return
