@@ -15,8 +15,10 @@ ASSETS = {
     '/manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json'),
     '/icon-192.png': ('icon-192.png', 'image/png'),
     '/icon-512.png': ('icon-512.png', 'image/png'),
-     '/avatar-rest-full.png': ('avatar-rest-full.png', 'image/png'),
+    '/avatar-rest-full.png': ('avatar-rest-full.png', 'image/png'),
     '/avatar-chat-half.png': ('avatar-chat-half.png', 'image/png'),
+    '/astra_test.html': ('astra_test.html', 'text/html; charset=utf-8'),
+    '/tu_uyen_robot.glb': ('tu_uyen_robot.glb', 'model/gltf-binary'),
   
 }
 
@@ -45,7 +47,16 @@ class PreviewHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Content-Security-Policy', "default-src 'self' 'unsafe-inline' data:; connect-src 'self'; img-src 'self' data:; media-src 'self' data:; object-src 'none'; frame-ancestors 'none'")
+        if path == '/astra_test.html':
+            # Allow model-viewer from unpkg for this isolated 3D test page only.
+            csp = ("default-src 'self' 'unsafe-inline' data:; "
+                   "script-src 'self' https://unpkg.com; "
+                   "connect-src 'self'; img-src 'self' data: blob:; "
+                   "media-src 'self' data: blob:; worker-src 'self' blob:; "
+                   "object-src 'none'; frame-ancestors 'none'")
+        else:
+            csp = "default-src 'self' 'unsafe-inline' data:; connect-src 'self'; img-src 'self' data:; media-src 'self' data:; object-src 'none'; frame-ancestors 'none'"
+        self.send_header('Content-Security-Policy', csp)
         self.end_headers()
         self.wfile.write(data)
 
