@@ -59,6 +59,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
                    "object-src 'none'; frame-ancestors 'none'")
         else:
             csp = "default-src 'self' 'unsafe-inline' data:; connect-src 'self'; img-src 'self' data:; media-src 'self' data:; object-src 'none'; frame-ancestors 'none'"
+        if path == '/quaternius_test.html':
+            csp = csp.replace("frame-ancestors 'none'", "frame-ancestors 'self'")
         self.send_header('Content-Security-Policy', csp)
         self.end_headers()
         self.wfile.write(data)

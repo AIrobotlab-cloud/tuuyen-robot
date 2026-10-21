@@ -301,6 +301,13 @@ body.state-speaking .avatar-chat.active {
     }
 }
 
+
+/* V1.6 — 3D hình hài tùy chọn; mặc định 2D để không làm đổi trải nghiệm */
+.robot-stage { display:none; position:relative; flex:1; width:100%; min-height:0; overflow:hidden; background:#101e30; }
+.robot-stage.visible { display:block; }
+.robot-stage iframe { width:100%; height:100%; display:block; border:0; background:#101e30; }
+.robot-stage .robot-loading { position:absolute; top:12px; left:12px; z-index:1; pointer-events:none; background:#06111bd9; border:1px solid #247488; border-radius:8px; padding:7px 10px; color:#aee8f3; font-size:12px; }
+body.ty-view-3d #avatarStage { display:none; }
 </style>
 </head>
 <body class="state-idle">
@@ -311,6 +318,7 @@ body.state-speaking .avatar-chat.active {
             <button class="rpg-badge-btn" id="rpg-badge-btn" onclick="openRpgModal()">⚔️ Lv.4 (Tải...)</button>
         </div>
         <div class="control-group">
+            <select class="select-btn" id="avatar-form-select" aria-label="Chọn hình hài Tử Uyên"><option value="2d">🌸 Việt phục 2D</option><option value="3d">🤖 Robot 3D</option></select>
             <select class="select-btn" id="voice-select">
                 <option value="google_local">📱 Google tiếng Việt (trên điện thoại)</option>
                 <option value="nam_minh">🎙️ Nam Minh (Trầm Binh Gia)</option>
@@ -338,6 +346,8 @@ body.state-speaking .avatar-chat.active {
     >
 </div>
 <!-- End TY-VIRTUAL Avatar Stage -->
+<!-- V1.6: mô hình 3D ở iframe cùng tên miền, chỉ tải khi chọn -->
+<div id="tyRobotStage" class="robot-stage" aria-label="Tử Uyên Robot 3D"><div id="tyRobotLoading" class="robot-loading">Đang chuẩn bị hình hài robot…</div></div>
 
 
     <div class="face-container">
@@ -854,9 +864,49 @@ function setAvatarMode(mode) {
     chat.classList.toggle('active', isActive);
 }
 
+        // TY-VIRTUAL V1.6 — Nghe/Nghĩ/Nói/Nghỉ là trạng thái THẬT từ logic thoại hiện có.
+        // Robot TEST chạy trong iframe cùng origin, không nhận token, câu hỏi hay nội dung trả lời.
+        const tyFormSelect = document.getElementById('avatar-form-select');
+        const tyRobotStage = document.getElementById('tyRobotStage');
+        const tyRobotLoading = document.getElementById('tyRobotLoading');
+        let tyRobotFrame = null;
+        let tyRobotReady = false;
+        let tyActualState = 'idle';
+        function tySendRobotState() {
+            if (!tyRobotReady || !tyRobotFrame || !tyRobotFrame.contentWindow) return;
+            tyRobotFrame.contentWindow.postMessage({type:'TY_ROBOT_STATE',state:tyActualState}, location.origin);
+        }
+        function tySetForm(mode) {
+            const enabled = mode === '3d';
+            tyFormSelect.value = enabled ? '3d' : '2d';
+            body.classList.toggle('ty-view-3d',enabled);
+            tyRobotStage.classList.toggle('visible',enabled);
+            if (enabled && !tyRobotFrame) {
+                tyRobotFrame=document.createElement('iframe');
+                tyRobotFrame.title='Quaternius Robot — Tử Uyên 3D';
+                tyRobotFrame.loading='eager';
+                tyRobotFrame.src='/quaternius_test.html?embed=1';
+                tyRobotStage.appendChild(tyRobotFrame);
+            }
+            if (enabled) tySendRobotState();
+        }
+        tyFormSelect.addEventListener('change',()=>tySetForm(tyFormSelect.value));
+        window.addEventListener('message',event=>{
+            if (event.origin!==location.origin || !tyRobotFrame || event.source!==tyRobotFrame.contentWindow) return;
+            if (event.data && event.data.type==='TY_ROBOT_READY') {
+                tyRobotReady=true;
+                tyRobotLoading.style.display='none';
+                tySendRobotState();
+            }
+            if (event.data && event.data.type==='TY_ROBOT_ERROR') {
+                tyRobotLoading.textContent='Robot 3D chưa tải được — chuyển về Việt phục 2D để tiếp tục.';
+            }
+        });
         function setRobotState(state) {
-            body.className = `state-${state}` + (currentAuraClass ? ` ${currentAuraClass}` : '');
+            body.className = `state-${state}` + (currentAuraClass ? ` ${currentAuraClass}` : '') + (tyFormSelect.value === '3d' ? ' ty-view-3d' : '');
             setAvatarMode(state === 'idle' ? 'rest' : 'active');
+            tyActualState = state;
+            tySendRobotState();
             if (state === 'idle') {
                 pupilLeft.style.transform = 'translate(0, 0)';
                 pupilRight.style.transform = 'translate(0, 0)';
