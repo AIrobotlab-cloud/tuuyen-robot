@@ -51,7 +51,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             # Allow model-viewer from unpkg for this isolated 3D test page only.
             csp = ("default-src 'self' 'unsafe-inline' data:; "
                    "script-src 'self' https://unpkg.com; "
-                   "connect-src 'self'; img-src 'self' data: blob:; "
+                   "connect-src 'self' blob:; img-src 'self' data: blob:; "
                    "media-src 'self' data: blob:; worker-src 'self' blob:; "
                    "object-src 'none'; frame-ancestors 'none'")
         else:
