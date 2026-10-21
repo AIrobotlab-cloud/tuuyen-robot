@@ -18,6 +18,7 @@ ASSETS = {
     '/avatar-rest-full.png': ('avatar-rest-full.png', 'image/png'),
     '/avatar-chat-half.png': ('avatar-chat-half.png', 'image/png'),
     '/astra_test.html': ('astra_test.html', 'text/html; charset=utf-8'),
+    '/astra_actions.html': ('astra_actions.html', 'text/html; charset=utf-8'),
     '/tu_uyen_robot.glb': ('tu_uyen_robot.glb', 'model/gltf-binary'),
   
 }
@@ -47,11 +48,11 @@ class PreviewHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
-        if path == '/astra_test.html':
+        if path in ('/astra_test.html', '/astra_actions.html'):
             # Allow model-viewer from unpkg for this isolated 3D test page only.
             csp = ("default-src 'self' 'unsafe-inline' data:; "
-                   "script-src 'self' https://unpkg.com; "
-                   "connect-src 'self' blob:; img-src 'self' data: blob:; "
+                   "script-src 'self' https://unpkg.com https://cdn.jsdelivr.net; "
+                   "connect-src 'self' blob: https://cdn.jsdelivr.net https://unpkg.com; img-src 'self' data: blob:; "
                    "media-src 'self' data: blob:; worker-src 'self' blob:; "
                    "object-src 'none'; frame-ancestors 'none'")
         else:
