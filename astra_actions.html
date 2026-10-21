@@ -19,7 +19,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px}h1{
 </script>
 </head>
 <body><main>
-<header><div><h1>TỬ UYÊN · ASTRA ACTIONS</h1><small>TY-VIRTUAL V1.4B · Trang TEST độc lập</small></div><span class="tag">0đ · 3D LAB</span></header>
+<header><div><h1>TỬ UYÊN · ASTRA ACTIONS</h1><small>TY-VIRTUAL V1.4B.2 · Thử nghiệm mục tiêu bàn tay</small></div><span class="tag">0đ · 3D LAB</span></header>
 <section class="stage"><canvas id="canvas" aria-label="Nhân vật robot Astra 3D"></canvas><div id="loading">Đang tải mô hình 3D…</div><div id="status" class="status" style="--accent:#80dfbd"><i></i><span>NGHỈ NGƠI</span></div></section>
 <div class="controls" role="group" aria-label="Thử động tác">
 <button data-mode="idle" aria-pressed="true" style="--accent:#80dfbd" disabled>◌ Nghỉ</button>
@@ -58,37 +58,60 @@ const camera=new THREE.PerspectiveCamera(35,1,.02,2000);
 const orbit=new OrbitControls(camera,renderer.domElement);orbit.enableDamping=true;orbit.dampingFactor=.08;orbit.enablePan=false;orbit.minDistance=1;orbit.maxDistance=800;
 function resize(){const parent=canvas.parentElement;let w=parent.clientWidth,h=parent.clientHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix()}
 window.addEventListener('resize',resize);resize();
-function findBone(fragment){let found;model.traverse(o=>{if(!found&&o.isBone&&o.name.toLowerCase().includes(fragment.toLowerCase())&&!o.name.includes('Twist'))found=o});return found}
-// The model is rigged. Apply additive pose AFTER the idle mixer each frame,
-// so repeated mixer updates never permanently distort rest rotations.
-function turnBone(bone,ax,ay,az,weight){if(!bone||!weight)return;
- const offset=new THREE.Quaternion().setFromEuler(new THREE.Euler(ax*weight,ay*weight,az*weight,'XYZ'));
- bone.quaternion.multiply(offset);
+function findBone(fragment){let found;model.traverse(o=>{if(!found&&o.isBone&&o.name.startsWith(fragment))found=o});return found}
+// World-space CCD: direct each wrist toward an identifiable pose target.
+// Unlike fixed Euler angles on imported bones, this handles their unusual local axes.
+const wp=(o)=>o.getWorldPosition(new THREE.Vector3());
+// Astra's original model is Z-up, front is -Y.
+function aimJoint(joint,end,target,step=.25){
+ if(!joint||!end)return;
+ model.updateMatrixWorld(true);
+ const pivot=wp(joint),tip=wp(end);
+ const v1=tip.sub(pivot),v2=target.clone().sub(pivot);
+ if(v1.lengthSq()<.001||v2.lengthSq()<.001)return;
+ v1.normalize();v2.normalize();
+ const q=new THREE.Quaternion().setFromUnitVectors(v1,v2);
+ const angle=2*Math.acos(THREE.MathUtils.clamp(q.w,-1,1));
+ if(angle<.0001)return;
+ const limited=new THREE.Quaternion().identity().slerp(q,Math.min(1,step/angle));
+ const parentQ=joint.parent.getWorldQuaternion(new THREE.Quaternion());
+ const worldQ=joint.getWorldQuaternion(new THREE.Quaternion());
+ const newWorld=limited.multiply(worldQ);
+ joint.quaternion.copy(parentQ.invert().multiply(newWorld)).normalize();
+}
+function handGoal(side,kind,t){
+ const head=wp(bones.head),shoulder=wp(side==='right'?bones.rightUpper:bones.leftUpper);
+ const sideDir=Math.sign(shoulder.x-head.x)|| (side==='right'?-1:1);
+ const x=sideDir;
+ if(kind==='listen')return head.add(new THREE.Vector3(x*10,-8,3+1.1*Math.sin(t*1.8)));
+ if(kind==='think')return head.add(new THREE.Vector3(x*1.5,-13,-11+.7*Math.sin(t*1.0)));
+ // explaining: open palm in front and to the side of the body
+ return shoulder.add(new THREE.Vector3(x*19,-32,2+3.5*Math.sin(t*2.6)));
+}
+function reach(side,goal,weight){
+ const upper=side==='right'?bones.rightUpper:bones.leftUpper;
+ const fore=side==='right'?bones.rightFore:bones.leftFore;
+ const hand=side==='right'?bones.rightHand:bones.leftHand;
+ if(!upper||!fore||!hand)return;
+ const baseline=wp(hand);
+ const blended=baseline.lerp(goal,weight);
+ for(let i=0;i<7;i++){aimJoint(fore,hand,blended,.32);aimJoint(upper,hand,blended,.26)}
 }
 function pose(t,w){
  if(mode==='listen'){
-  // Signal: right arm raised; head tilts clearly to one side.
-  turnBone(bones.head,0,.12*Math.sin(t*1.3),-.19,w);
-  turnBone(bones.neck,0,0,-.08,w);
-  turnBone(bones.rightUpper,.08,-.15,-.9,w);
-  turnBone(bones.rightFore,0,-.12,-1.15,w);
-  turnBone(bones.rightHand,0,-.2,0,w);
+  turnBone(bones.head,0,.07*Math.sin(t),-.17,w);
+  reach('right',handGoal('right','listen',t),w);
  }else if(mode==='think'){
-  // Signal: left arm folded toward chin; head lowers in thought.
-  turnBone(bones.head,.18+.035*Math.sin(t),0,.11,w);
-  turnBone(bones.neck,.07,0,0,w);
-  turnBone(bones.leftUpper,.10,.18,.74,w);
-  turnBone(bones.leftFore,-.1,.12,1.25,w);
-  turnBone(bones.leftHand,.15,0,0,w);
+  turnBone(bones.head,.12,0,.07,w);
+  reach('left',handGoal('left','think',t),w);
  }else if(mode==='speak'){
-  // Signal: open explanatory arm motions, rhythmic head nods.
-  const beat=Math.sin(t*3.0);
-  turnBone(bones.head,.045*beat,.06*Math.sin(t*1.5),0,w);
-  turnBone(bones.rightUpper,-.25+.10*beat,-.18,-.58,w);
-  turnBone(bones.rightFore,-.1,-.08,-.35+.18*beat,w);
-  turnBone(bones.rightHand,0,.2+.12*beat,0,w);
-  turnBone(bones.leftUpper,-.10,0,.26,w);
+  turnBone(bones.head,.045*Math.sin(t*2),.05*Math.sin(t),0,w);
+  reach('right',handGoal('right','speak',t),w);
  }
+}
+function turnBone(bone,ax,ay,az,weight){
+ if(!bone||!weight)return;
+ bone.quaternion.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(ax*weight,ay*weight,az*weight,'XYZ')));
 }
 function setMode(value){mode=value;amount=0;desc.textContent=descriptions[value];status.style.setProperty('--accent',colors[value]);status.querySelector('span').textContent=labels[value];buttons.forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.mode===value)))}
 buttons.forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.mode)));
