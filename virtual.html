@@ -308,6 +308,55 @@ body.state-speaking .avatar-chat.active {
 .robot-stage iframe { width:100%; height:100%; display:block; border:0; background:#101e30; }
 .robot-stage .robot-loading { position:absolute; top:12px; left:12px; z-index:1; pointer-events:none; background:#06111bd9; border:1px solid #247488; border-radius:8px; padding:7px 10px; color:#aee8f3; font-size:12px; }
 body.ty-view-3d #avatarStage { display:none; }
+
+        /* TY-VIRTUAL V1.7.1 — chỉ sửa thanh điều khiển trên điện thoại.
+           Không can thiệp JS, thoại, xác thực, RPG hoặc hiển thị robot. */
+        @media (max-width: 640px) {
+            .top-bar {
+                display: flex;
+                flex-direction: column;
+                align-items: stretch;
+                justify-content: flex-start;
+                gap: 10px;
+                padding: 10px 8px;
+                min-width: 0;
+            }
+            .top-bar .left-group {
+                width: 100%;
+                min-width: 0;
+                flex-wrap: wrap;
+                justify-content: flex-start;
+                gap: 8px;
+            }
+            .top-bar .control-group {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                gap: 8px;
+                width: 100%;
+                min-width: 0;
+                align-items: stretch;
+            }
+            .top-bar .control-group .select-btn {
+                display: block;
+                width: 100%;
+                min-width: 0;
+                max-width: 100%;
+                padding: 9px 5px;
+                font-size: 11px;
+                text-overflow: ellipsis;
+            }
+            .top-bar .control-group .mode-toggle {
+                grid-column: 1 / -1;
+                justify-self: stretch;
+                width: 100%;
+                min-width: 0;
+                max-width: 100%;
+                padding: 9px 8px;
+                white-space: normal;
+                overflow-wrap: anywhere;
+            }
+        }
+
 </style>
 </head>
 <body class="state-idle">
