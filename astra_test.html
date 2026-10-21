@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tử Uyên Robot Test</title>
+  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      background: radial-gradient(circle at center, #1b2230 0%, #0b0f16 100%);
+      color: #fff;
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    .topbar {
+      padding: 14px 18px;
+      text-align: center;
+      font-size: 18px;
+      font-weight: bold;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .viewer-wrap {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px;
+    }
+
+    model-viewer {
+      width: 100%;
+      max-width: 900px;
+      height: 100%;
+      background: transparent;
+      --poster-color: transparent;
+    }
+
+    .footer {
+      padding: 12px 16px;
+      font-size: 13px;
+      text-align: center;
+      color: #9fb3c8;
+      border-top: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .hint {
+      color: #7fd4ff;
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">Tử Uyên Robot — Astra Test</div>
+
+  <div class="viewer-wrap">
+    <model-viewer
+      src="./tu_uyen_robot.glb"
+      alt="Tử Uyên Robot"
+      camera-controls
+      auto-rotate
+      autoplay
+      animation-name="Idle02_F"
+      shadow-intensity="1"
+      exposure="1.1"
+      environment-image="neutral"
+      interaction-prompt="auto">
+    </model-viewer>
+  </div>
+
+  <div class="footer">
+    Test nhanh model 3D cho Tử Uyên. 
+    <span class="hint">Nếu model hiện và chuyển động nhẹ, nghĩa là file dùng tốt.</span>
+  </div>
+</body>
+</html>
