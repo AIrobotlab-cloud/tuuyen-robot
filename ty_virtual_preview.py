@@ -51,7 +51,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if path in ('/astra_test.html', '/astra_actions.html'):
             # Allow model-viewer from unpkg for this isolated 3D test page only.
             csp = ("default-src 'self' 'unsafe-inline' data:; "
-                   "script-src 'self' https://unpkg.com https://cdn.jsdelivr.net; "
+                   "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; "
                    "connect-src 'self' blob: https://cdn.jsdelivr.net https://unpkg.com; img-src 'self' data: blob:; "
                    "media-src 'self' data: blob:; worker-src 'self' blob:; "
                    "object-src 'none'; frame-ancestors 'none'")
