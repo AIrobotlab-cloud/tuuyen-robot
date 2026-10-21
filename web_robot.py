@@ -839,6 +839,9 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
             "/icon-512.png": ("icon-512.png", "image/png"),
             "/avatar-rest-full.png": ("avatar-rest-full.png", "image/png"),
             "/avatar-chat-half.png": ("avatar-chat-half.png", "image/png"),
+            # TY-VIRTUAL V1.7: public 3D visual assets, no API or private files.
+            "/Robot.fbx": ("Robot.fbx", "application/octet-stream"),
+            "/quaternius_test.html": ("quaternius_test.html", "text/html; charset=utf-8"),
         }
         asset = assets.get(path)
         if asset is None:
@@ -855,6 +858,15 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "public, max-age=300")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if path == "/quaternius_test.html":
+            self.send_header("Content-Security-Policy",
+                             "default-src 'self' data:; "
+                             "script-src 'self' 'unsafe-inline' https://unpkg.com; "
+                             "connect-src 'self' blob: https://unpkg.com; "
+                             "img-src 'self' data: blob:; "
+                             "style-src 'self' 'unsafe-inline'; "
+                             "worker-src 'self' blob:; "
+                             "frame-ancestors 'self'; object-src 'none'; base-uri 'none'")
         self.end_headers()
         self.wfile.write(content)
         return True
