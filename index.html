@@ -193,7 +193,7 @@
                 <option value="vip_taothao">👑 VIP Tào Tháo (Bá Nghị)</option>
                 <option value="hoai_my">🌸 Hoài My (Nữ Thanh Thoát)</option>
             </select>
-            <button class="mode-toggle" id="mode-btn" onclick="toggleModelMode()">⚡ Huấn luyện (~2đ)</button>
+            <button class="mode-toggle" id="mode-btn" onclick="toggleModelMode()">⚡ Huấn luyện (GPT-4o Mini)</button>
         </div>
     </div>
 
@@ -662,16 +662,25 @@
         });
         document.addEventListener('touchstart', () => { requestWakeLock(); }, { passive: true });
 
+        // TY-LLM-CHOICE V1: cycle through the existing ShopAIKey models and
+        // the direct OpenAI option. Do not change chat memory, TTS or RPG logic.
+        const selectableModels = [
+            { id: 'gpt-4o-mini', label: '⚡ Huấn luyện (GPT-4o Mini)', pro: false },
+            { id: 'gpt-4o', label: '👑 Demo (GPT-4o)', pro: true },
+            { id: 'gpt-6-luna', label: '🌙 GPT-6 Luna (OpenAI)', pro: true }
+        ];
         function toggleModelMode() {
-            if (currentModel === 'gpt-4o-mini') {
-                currentModel = 'gpt-4o';
-                modeBtn.classList.add('pro');
-                modeBtn.innerText = "👑 Demo (GPT-4o)";
-            } else {
-                currentModel = 'gpt-4o-mini';
-                modeBtn.classList.remove('pro');
-                modeBtn.innerText = "⚡ Huấn luyện (~2đ)";
+            // Avoid switching model while an answer is in flight.
+            if (isBusy) {
+                statusText.textContent = 'CHỜ HOÀN TẤT LƯỢT HIỆN TẠI ĐỂ ĐỔI MÔ HÌNH';
+                return;
             }
+            const i = selectableModels.findIndex(item => item.id === currentModel);
+            const next = selectableModels[(i + 1) % selectableModels.length];
+            currentModel = next.id;
+            modeBtn.classList.toggle('pro', next.pro);
+            modeBtn.textContent = next.label;
+            statusText.textContent = 'ĐÃ CHỌN ' + next.id.toUpperCase();
         }
 
         function triggerBlink() {

@@ -40,6 +40,53 @@ FREE_VOICES = {
 
 DEFAULT_MODEL = "gpt-4o-mini"
 
+# TY-LLM-CHOICE V1: OpenAI is a manually selectable alternative, not automatic fallback.
+OPENAI_MODEL = "gpt-6-luna"
+OPENAI_API_URL = "https://api.openai.com/v1/responses"
+
+
+def call_openai_luna(messages_payload):
+    """Call OpenAI directly via Responses API. Never log secrets or private prompts."""
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not configured")
+    # The same system instructions, memories and recent dialog are preserved.
+    input_messages = [
+        {"role": message["role"], "content": message["content"]}
+        for message in messages_payload
+    ]
+    response = requests.post(
+        OPENAI_API_URL,
+        headers={"Authorization": "Bearer " + api_key,
+                 "Content-Type": "application/json"},
+        json={"model": OPENAI_MODEL, "input": input_messages,
+              "store": False},
+        timeout=(8, 65),
+    )
+    if response.status_code != 200:
+        logger.warning("[TY-OPENAI] HTTP_ERROR status=%s", response.status_code)
+        raise RuntimeError("OpenAI request failed")
+    try:
+        result = response.json()
+        if result.get("status") not in (None, "completed"):
+            raise ValueError("Incomplete response")
+        fragments = []
+        for item in result.get("output", []):
+            if item.get("type") == "message" and item.get("role") == "assistant":
+                for piece in item.get("content", []):
+                    if piece.get("type") == "output_text" and isinstance(piece.get("text"), str):
+                        fragments.append(piece["text"])
+        answer = "".join(fragments).strip()
+        if not answer:
+            raise ValueError("Missing text in OpenAI response")
+        usage = result.get("usage", {})
+        logger.info("[TY-OPENAI] SUCCESS input_tokens=%s output_tokens=%s",
+                    usage.get("input_tokens", "?"), usage.get("output_tokens", "?"))
+        return answer
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        logger.warning("[TY-OPENAI] INVALID_RESPONSE type=%s", type(exc).__name__)
+        raise RuntimeError("OpenAI response invalid") from exc
+
 # ElevenLabs: API key only on Render server. Voice ID can be changed later.
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "").strip()
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb").strip()
@@ -1074,7 +1121,7 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
             if not isinstance(user_msg, str) or len(user_msg) > 2000:
                 self._deny(413, "Message too long")
                 return
-            if selected_model not in ("gpt-4o", "gpt-4o-mini"):
+            if selected_model not in ("gpt-4o", "gpt-4o-mini", OPENAI_MODEL):
                 self._deny(400, "Invalid model")
                 return
             if selected_voice not in ("nam_minh", "hoai_my", "vip_taothao", "elevenlabs_test", "google_local"):
@@ -1212,7 +1259,12 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
                 # 5. Gọi mô hình AI
                 llm_start = time.perf_counter()
                 logger.info("[TY-DIAG] LLM_START")
-                reply_text = bot_brain.call_ai_model(payload)
+                if selected_model == OPENAI_MODEL:
+                    reply_text = call_openai_luna(payload)
+                else:
+                    reply_text = bot_brain.call_ai_model(payload)
+                if not isinstance(reply_text, str) or not reply_text.strip() or reply_text.startswith("Xin lỗi đạo hữu, kết nối trí tuệ gặp trục trặc"):
+                    raise RuntimeError("LLM returned no valid answer")
                 llm_elapsed = time.perf_counter() - llm_start
                 logger.info("[TY-DIAG] LLM_DONE duration=%.2fs", llm_elapsed)
 
