@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tử Uyên Lab — Quaternius Robot</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#07121e;color:#ecf8ff;font:15px system-ui,Arial}.page{max-width:1000px;margin:auto;padding:14px}h1{font-size:20px;margin:6px 0}p{color:#b2cfe0;font-size:13px;line-height:1.5}.view{height:min(65vh,620px);min-height:320px;border:1px solid #315269;background:#152638;border-radius:13px;position:relative;overflow:hidden}#status{position:absolute;left:12px;top:12px;padding:8px 11px;border:1px solid #4b8391;border-radius:8px;background:#091a29cb;font-size:12px;max-width:90%}.controls{display:flex;flex-wrap:wrap;gap:9px;margin:12px 0}.controls button{flex:1 1 130px;min-height:45px;background:#16334b;color:#fff;border:1px solid #40748b;border-radius:9px;font-weight:600;cursor:pointer}.controls button.active{background:#165875;border-color:#64e6ec}.controls button:disabled{opacity:.4}.simulation{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0}.simulation button{padding:12px 16px;border-radius:9px;border:1px solid #6de4dc;background:#145c66;color:#fff;font-weight:700;cursor:pointer}.simulation button:disabled{opacity:.5}.simulation button.stop{background:#4e2737;border-color:#cf7b92}.simulation label{font-size:12px;color:#abd2e4}.foot{font-size:12px;color:#9bb5c8}#clipnames{font-size:12px;line-height:1.5;color:#abd2e4}a{color:#7ddffc}
+
+html.ty-embedded,html.ty-embedded body {width:100%;height:100%;overflow:hidden}
+html.ty-embedded .page {padding:0;width:100%;height:100%;max-width:none}
+html.ty-embedded h1,html.ty-embedded p,html.ty-embedded .controls,html.ty-embedded .simulation,html.ty-embedded #clipnames {display:none !important}
+html.ty-embedded .view {height:100%;min-height:0;border:0;border-radius:0}
+html.ty-embedded #status {font-size:11px;z-index:2}
+</style>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.1/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.1/examples/jsm/"}}</script>
+</head><body><div class="page"><h1>TỬ UYÊN — QUATERNIUS ROBOT LAB</h1><p>Hình hài 3D Tử Uyên · hoạt ảnh đồng bộ với trạng thái giao diện</p>
+<div class="view" id="view"><span id="status">Đang nạp Robot.fbx…</span></div>
+<div class="controls" id="buttons"><button disabled data-action="Idle">Nghỉ · Idle</button><button disabled data-action="Yes">Nghe · Yes</button><button disabled data-action="No">Nghĩ · No</button><button disabled data-action="Wave">Nói · Wave</button><button disabled data-action="ThumbsUp">Vui · Thumbs Up</button><button disabled data-action="Sitting">Ngồi · Sitting</button><button disabled data-action="Dance">♫ Nhảy · Dance (thử nghiệm)</button></div>
+<div class="simulation"><button id="run-demo" disabled>▶ Mô phỏng hội thoại</button><button class="stop" id="stop-demo" disabled>■ Dừng mô phỏng</button><label id="demo-progress" aria-live="polite">Sẵn sàng sau khi nạp robot</label></div><div id="clipnames">Danh sách hoạt ảnh: đang tải…</div><p class="foot">Xoay nhân vật bằng chuột hoặc ngón tay. Khi chọn trạng thái, trang sẽ phát clip tương ứng. Nút mô phỏng chạy theo thời gian định trước, nút thủ công sẽ ngắt mô phỏng. Bản demo kỹ thuật; chưa khẳng định các cử chỉ phù hợp nghĩa nghe/nghĩ/nói.</p><p class="foot">Tài nguyên robot: <a href="https://quaternius.itch.io/lowpoly-robot">Quaternius — LowPoly Robot</a> · CC0 1.0.</p></div>
+<script type="module">
+import * as THREE from 'three';
+import {FBXLoader} from 'three/addons/loaders/FBXLoader.js';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+const embed=new URLSearchParams(location.search).get('embed')==='1';
+if(embed)document.documentElement.classList.add('ty-embedded');
+const view=document.querySelector('#view'), status=document.querySelector('#status');
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x152638);
+const camera=new THREE.PerspectiveCamera(40,1,.01,1000);camera.position.set(0,1.1,4);
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:false});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.setSize(view.clientWidth,view.clientHeight);view.appendChild(renderer.domElement);
+scene.add(new THREE.HemisphereLight(0xffffff,0x54667b,2.5));const sun=new THREE.DirectionalLight(0xffffff,2.4);sun.position.set(3,7,5);scene.add(sun);
+const floor=new THREE.GridHelper(8,16,0x315269,0x284457);scene.add(floor);
+const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.enablePan=false;
+let mixer=null, actions=new Map(),current=null;let base=null;
+const runButton=document.querySelector('#run-demo'),stopButton=document.querySelector('#stop-demo'),progress=document.querySelector('#demo-progress');
+let demoToken=0,demoTimer=null;
+function cancelDemo(){demoToken++;if(demoTimer!==null){clearTimeout(demoTimer);demoTimer=null;}runButton.disabled=!mixer;stopButton.disabled=true;progress.textContent='Đã dừng mô phỏng';}
+function waitDemo(ms, token){return new Promise(resolve=>{demoTimer=setTimeout(()=>{demoTimer=null;resolve(token===demoToken);},ms);});}
+async function runDemo(){if(!mixer||runButton.disabled)return;const token=++demoToken;runButton.disabled=true;stopButton.disabled=false;const steps=[['Yes','Lắng nghe',3500],['No','Suy nghĩ',3000],['Wave','Trả lời',4500],['Idle','Nghỉ ngơi',1500]];for(let i=0;i<steps.length;i++){if(token!==demoToken)return;const [name,label,duration]=steps[i];progress.textContent=`${i+1}/4 — ${label} (${duration/1000}s)`;choose(name,true);if(!await waitDemo(duration,token))return;}runButton.disabled=false;stopButton.disabled=true;progress.textContent='Hoàn tất chu trình mô phỏng · Sẵn sàng thử lại';}
+runButton.addEventListener('click',runDemo);stopButton.addEventListener('click',()=>{cancelDemo();choose('Idle',true);});
+function resize(){let w=view.clientWidth,h=view.clientHeight;camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h)}window.addEventListener('resize',resize);resize();
+function choose(name,fromDemo=false){if(!fromDemo && !runButton.disabled && demoTimer!==null)cancelDemo();if(!fromDemo && stopButton.disabled===false)cancelDemo();const next=actions.get(name);if(!next){status.textContent='Không tìm thấy hoạt ảnh '+name;return}if(current!==next){if(current)current.fadeOut(.25);next.reset().fadeIn(.25).play();current=next;}status.textContent='ĐANG PHÁT: '+name;document.querySelectorAll('[data-action]').forEach(b=>b.classList.toggle('active',b.dataset.action===name));}
+document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>choose(b.dataset.action)));
+// TY-MUSIC A: music state is reserved for a future, explicitly confirmed player event.
+const tyStateClips={idle:'Idle',listening:'Yes',thinking:'No',speaking:'Wave',music:'Dance'};
+let pendingParentState=null;
+window.addEventListener('message',event=>{
+ if(!embed || event.origin!==location.origin || event.source!==window.parent) return;
+ const data=event.data;
+ if(!data || data.type!=='TY_ROBOT_STATE' || !Object.prototype.hasOwnProperty.call(tyStateClips,data.state)) return;
+ if(!mixer){pendingParentState=data.state;return;}
+ const wanted=tyStateClips[data.state];
+ if(actions.has(wanted))choose(wanted,true);
+ else if(data.state==='music'){status.textContent='Robot.fbx chưa có clip Dance — giữ Idle';if(actions.has('Idle'))choose('Idle',true);}
+ else if(actions.has('Idle'))choose('Idle',true);
+});
+
+const loader=new FBXLoader();
+loader.load('./Robot.fbx',model=>{base=model;scene.add(model);const box=new THREE.Box3().setFromObject(model);const size=box.getSize(new THREE.Vector3());const center=box.getCenter(new THREE.Vector3());const maxDim=Math.max(size.x,size.y,size.z)||1;const scale=2.4/maxDim;model.scale.multiplyScalar(scale);model.position.sub(center.multiplyScalar(scale)); // normalize to origin
+const box2=new THREE.Box3().setFromObject(model);const height=box2.max.y-box2.min.y;model.position.y+=-box2.min.y;floor.position.y=0;
+const radius=Math.max(height*.9,1.4);camera.position.set(0,height*.55,radius*2.3);controls.target.set(0,height*.47,0);controls.update();
+mixer=new THREE.AnimationMixer(model);model.animations.forEach(clip=>{const key=(clip.name.split('|').pop()||clip.name).replace(/^Robot_/i,'').replace(/^RobotArmature\|Robot_/i,'');actions.set(key,mixer.clipAction(clip));});
+document.querySelector('#clipnames').textContent='Đã nạp '+actions.size+' clip: '+[...actions.keys()].join(', ');
+document.querySelectorAll('[data-action]').forEach(b=>b.disabled=!actions.has(b.dataset.action));choose(actions.has('Idle')?'Idle':[...actions.keys()][0]);if(pendingParentState){const desired=tyStateClips[pendingParentState];if(actions.has(desired))choose(desired,true);pendingParentState=null;}if(!actions.has('Dance')){const danceButton=document.querySelector('[data-action="Dance"]');if(danceButton){danceButton.title='Robot.fbx hiện tại không có hoạt ảnh Dance';}progress.textContent='Robot.fbx chưa chứa clip Dance; chưa thể thử nhảy.';}runButton.disabled=false;progress.textContent='Sẵn sàng mô phỏng Nghe → Nghĩ → Nói → Nghỉ';if(embed)window.parent.postMessage({type:'TY_ROBOT_READY'},location.origin);
+},undefined,error=>{console.error(error);status.textContent='Không nạp được FBX. Mở F12 → Console và gửi ảnh lỗi.';if(embed)window.parent.postMessage({type:'TY_ROBOT_ERROR'},location.origin)});
+const clock=new THREE.Clock();function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);if(mixer)mixer.update(dt);controls.update();renderer.render(scene,camera)}animate();
+</script></body></html>
