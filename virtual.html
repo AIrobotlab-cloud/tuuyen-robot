@@ -491,15 +491,16 @@ body.ty-view-3d #avatarStage { display:none; }
     </div>
 
     <!-- TY-MUSIC B2: YouTube official embed remains visible during playback. -->
-    <section id="ty-music-panel" aria-label="Nhạc YouTube" style="display:none;position:fixed;right:8px;bottom:105px;width:min(96vw,340px);z-index:90;background:#0f172a;border:1px solid #38bdf8;border-radius:12px;padding:9px;box-shadow:0 8px 25px #0009">
+    <section id="ty-music-panel" aria-label="Nhạc YouTube" style="display:none;position:fixed;right:8px;bottom:100px;width:min(calc(100vw - 16px),256px);max-height:min(53vh,340px);overflow-y:auto;z-index:90;background:#0f172a;border:1px solid #38bdf8;border-radius:12px;padding:9px;box-shadow:0 8px 25px #0009">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
         <span id="ty-music-caption" style="font-size:12px;user-select:text;white-space:normal">Âm nhạc YouTube</span>
         <button type="button" id="ty-music-close" aria-label="Dừng và đóng nhạc" style="background:#334155;color:white;border:0;border-radius:6px;padding:5px 9px">✕</button>
       </div>
-      <div id="ty-music-player" style="width:100%;height:210px;background:#07121e"></div>
+      <div id="ty-music-player" style="width:100%;height:206px;background:#07121e"></div>
       <div style="display:flex;gap:7px;align-items:center;margin-top:7px">
         <button type="button" id="ty-music-play" style="padding:8px;background:#075985;color:white;border:0;border-radius:7px;flex:1">▶ Phát / tiếp tục</button>
         <button type="button" id="ty-music-pause" style="padding:8px;background:#334155;color:white;border:0;border-radius:7px;flex:1">Ⅱ Tạm dừng</button>
+        <button type="button" id="ty-music-stop" style="padding:8px;background:#7f1d1d;color:white;border:0;border-radius:7px;flex:1">■ Dừng</button>
       </div>
       <div id="ty-music-info" role="status" style="font-size:11px;color:#cbd5e1;margin-top:6px">Chưa phát nhạc</div>
     </section>
@@ -1353,7 +1354,15 @@ function setAvatarMode(mode) {
 
             if (!recognition) return;
 
-            if (listenMode === 'off') beginFollowupListening();
+            // Listening during music: pause loudspeaker first to reduce echo.
+            if (listenMode === 'off') {
+                if (tyMusicVideo && tyMusicPlayer && tyMusicPlayer.pauseVideo &&
+                    window.YT && tyMusicPlayer.getPlayerState &&
+                    tyMusicPlayer.getPlayerState() === YT.PlayerState.PLAYING) {
+                    tyMusicPause();
+                }
+                beginFollowupListening();
+            }
             else { shutdownRecognition(); statusText.textContent = 'NGHỈ — MICROPHONE ĐÃ TẮT'; }
         }
 
@@ -1386,6 +1395,7 @@ function setAvatarMode(mode) {
             tyMusicVideo = null;
             tyMusicBusy = false;
             setRobotState('idle');
+            statusText.textContent = 'ĐÃ DỪNG NHẠC';
         }
         function tyMusicPause() {
             if (tyMusicPlayer && typeof tyMusicPlayer.pauseVideo === 'function') tyMusicPlayer.pauseVideo();
@@ -1399,6 +1409,7 @@ function setAvatarMode(mode) {
             }
         }
         document.getElementById('ty-music-close').addEventListener('click', tyMusicStop);
+        document.getElementById('ty-music-stop').addEventListener('click', tyMusicStop);
         document.getElementById('ty-music-pause').addEventListener('click', tyMusicPause);
         document.getElementById('ty-music-play').addEventListener('click', tyMusicResume);
         window.onYouTubeIframeAPIReady = () => { tyMusicApiReady = true; };
@@ -1417,7 +1428,7 @@ function setAvatarMode(mode) {
                 return true;
             }
             tyMusicPlayer = new YT.Player('ty-music-player', {
-                height: '210', width: '320', videoId,
+                height: '206', width: '100%', videoId,
                 playerVars: { playsinline: 1, controls: 1, origin: location.origin },
                 events: {
                     onReady: event => {
@@ -1441,11 +1452,16 @@ function setAvatarMode(mode) {
         }
         function tyMusicSelectQuery(sentence) {
             const value = String(sentence || '').trim();
-            const normalized = normalizeSpoken(value);
-            if (/^(tu uyen\s+)?(dung nhac|tat nhac|ngung nhac|thoi phat nhac)(\s+di)?$/.test(normalized)) return {kind:'stop'};
-            if (/^(tu uyen\s+)?(tam dung nhac|dung phat nhac)(\s+di)?$/.test(normalized)) return {kind:'pause'};
-            if (/^(tu uyen\s+)?(tiep tuc phat nhac|phat tiep nhac)(\s+di)?$/.test(normalized)) return {kind:'resume'};
-            // Conservative: explicit music intent only, no accidental search for normal questions.
+            let command = normalizeSpoken(value)
+                .replace(/^(?:tu uyen(?: oi)?\s+)?/, '')
+                .replace(/^(?:hay|lam on|giup ta|giup toi)\s+/, '')
+                .replace(/\s+(?:di|nhe|nha|voi|cho ta|cho toi|lai)$/, '').trim();
+            // Only act on explicit MUSIC wording, not generic 'dừng' or ordinary dialogue.
+            if (/^(?:dung|ngung|tat|stop|ket thuc)\s+(?:phat\s+)?(?:nhac|bai hat|bai nhac)(?:\s+(?:nay|dang phat))?$/.test(command)
+                || /^(?:dung|ngung|tat)\s+(?:cai\s+)?nhac\s+(?:nay|di|lai)$/.test(command)
+                || /^khong\s+(?:phat|nghe)\s+nhac\s+nua$/.test(command)) return {kind:'stop'};
+            if (/^(?:tam dung|tam ngung)\s+(?:phat\s+)?(?:nhac|bai hat|bai nhac)$/.test(command)) return {kind:'pause'};
+            if (/^(?:tiep tuc|phat tiep|mo lai|bat lai)\s+(?:phat\s+)?(?:nhac|bai hat|bai nhac)$/.test(command)) return {kind:'resume'};
             const match = value.match(/^(?:Tử\s*Uyên[\s,ơi]*[,:]?\s*)?(?:hãy\s+)?(?:tìm\s+(?:và\s+)?phát|tìm|mở|phát|bật|cho\s+(?:ta|tôi)\s+nghe)\s+(?:(?:cho\s+(?:ta|tôi)\s+)?(?:bài\s+hát|bài\s+nhạc|bài|nhạc)\s+)(.+)$/iu);
             if (!match) return null;
             const title = match[1].trim().replace(/[.?!]+$/, '').trim();
