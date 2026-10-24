@@ -490,6 +490,19 @@ body.ty-view-3d #avatarStage { display:none; }
       </form>
     </div>
 
+    <!-- TY-MUSIC B2: YouTube official embed remains visible during playback. -->
+    <section id="ty-music-panel" aria-label="Nhạc YouTube" style="display:none;position:fixed;right:8px;bottom:105px;width:min(96vw,340px);z-index:90;background:#0f172a;border:1px solid #38bdf8;border-radius:12px;padding:9px;box-shadow:0 8px 25px #0009">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
+        <span id="ty-music-caption" style="font-size:12px;user-select:text;white-space:normal">Âm nhạc YouTube</span>
+        <button type="button" id="ty-music-close" aria-label="Dừng và đóng nhạc" style="background:#334155;color:white;border:0;border-radius:6px;padding:5px 9px">✕</button>
+      </div>
+      <div id="ty-music-player" style="width:100%;height:210px;background:#07121e"></div>
+      <div style="display:flex;gap:7px;align-items:center;margin-top:7px">
+        <button type="button" id="ty-music-play" style="padding:8px;background:#075985;color:white;border:0;border-radius:7px;flex:1">▶ Phát / tiếp tục</button>
+        <button type="button" id="ty-music-pause" style="padding:8px;background:#334155;color:white;border:0;border-radius:7px;flex:1">Ⅱ Tạm dừng</button>
+      </div>
+      <div id="ty-music-info" role="status" style="font-size:11px;color:#cbd5e1;margin-top:6px">Chưa phát nhạc</div>
+    </section>
     <audio id="server-audio" style="display: none;" playsinline></audio>
 
     <script>
@@ -947,7 +960,7 @@ function setAvatarMode(mode) {
             }
             if (enabled) tySendRobotState();
         }
-        tyFormSelect.addEventListener('change',()=>tySetForm(tyFormSelect.value));
+        tyFormSelect.addEventListener('change',()=>{tySetForm(tyFormSelect.value);if(tyMusicPlayer && window.YT && tyMusicPlayer.getPlayerState && tyMusicPlayer.getPlayerState()===YT.PlayerState.PLAYING) tyMusicState(true);});
         window.addEventListener('message',event=>{
             if (event.origin!==location.origin || !tyRobotFrame || event.source!==tyRobotFrame.contentWindow) return;
             if (event.data && event.data.type==='TY_ROBOT_READY') {
@@ -1344,6 +1357,150 @@ function setAvatarMode(mode) {
             else { shutdownRecognition(); statusText.textContent = 'NGHỈ — MICROPHONE ĐÃ TẮT'; }
         }
 
+        // TY-MUSIC B2 — independent, opt-in YouTube search/player. No LLM or memory writes.
+        const tyMusicPanel = document.getElementById('ty-music-panel');
+        const tyMusicInfo = document.getElementById('ty-music-info');
+        const tyMusicCaption = document.getElementById('ty-music-caption');
+        let tyMusicPlayer = null, tyMusicApiReady = false, tyMusicVideo = null;
+        let tyMusicRequest = 0, tyMusicBusy = false;
+        function tyMusicState(playing) {
+            if (playing && tyFormSelect.value === '3d') {
+                tyActualState = 'music';
+                tySendRobotState();
+            } else if (tyActualState === 'music') {
+                tyActualState = 'idle';
+                tySendRobotState();
+            }
+        }
+        function tyMusicStatus(message) {
+            tyMusicInfo.textContent = message;
+            statusText.textContent = message;
+        }
+        function tyMusicStop() {
+            tyMusicRequest++;
+            if (tyMusicPlayer && typeof tyMusicPlayer.stopVideo === 'function') {
+                try { tyMusicPlayer.stopVideo(); } catch (_) {}
+            }
+            tyMusicState(false);
+            tyMusicPanel.style.display = 'none';
+            tyMusicVideo = null;
+            tyMusicBusy = false;
+            setRobotState('idle');
+        }
+        function tyMusicPause() {
+            if (tyMusicPlayer && typeof tyMusicPlayer.pauseVideo === 'function') tyMusicPlayer.pauseVideo();
+            tyMusicState(false);
+            tyMusicStatus('NHẠC ĐÃ TẠM DỪNG');
+        }
+        function tyMusicResume() {
+            if (tyMusicPlayer && typeof tyMusicPlayer.playVideo === 'function') {
+                tyMusicPlayer.playVideo();
+                tyMusicStatus('ĐANG YÊU CẦU PHÁT NHẠC…');
+            }
+        }
+        document.getElementById('ty-music-close').addEventListener('click', tyMusicStop);
+        document.getElementById('ty-music-pause').addEventListener('click', tyMusicPause);
+        document.getElementById('ty-music-play').addEventListener('click', tyMusicResume);
+        window.onYouTubeIframeAPIReady = () => { tyMusicApiReady = true; };
+        function tyMusicLoadApi() {
+            if (window.YT && window.YT.Player) { tyMusicApiReady = true; return; }
+            if (document.getElementById('ty-youtube-api-script')) return;
+            const script = document.createElement('script');
+            script.id = 'ty-youtube-api-script';
+            script.src = 'https://www.youtube.com/iframe_api';
+            document.head.appendChild(script);
+        }
+        function tyMusicCreatePlayer(videoId) {
+            if (!tyMusicApiReady || !window.YT || !window.YT.Player) return false;
+            if (tyMusicPlayer) {
+                tyMusicPlayer.cueVideoById(videoId);
+                return true;
+            }
+            tyMusicPlayer = new YT.Player('ty-music-player', {
+                height: '210', width: '320', videoId,
+                playerVars: { playsinline: 1, controls: 1, origin: location.origin },
+                events: {
+                    onReady: event => {
+                        if (tyMusicVideo) event.target.cueVideoById(tyMusicVideo);
+                        tyMusicStatus('ĐÃ TÌM THẤY — CHẠM ▶ ĐỂ PHÁT');
+                    },
+                    onStateChange: event => {
+                        if (event.data === YT.PlayerState.PLAYING) {
+                            tyMusicState(true);
+                            tyMusicStatus('ĐANG PHÁT NHẠC');
+                        } else if ([YT.PlayerState.PAUSED, YT.PlayerState.ENDED,
+                                    YT.PlayerState.CUED].includes(event.data)) {
+                            tyMusicState(false);
+                            if (event.data === YT.PlayerState.ENDED) tyMusicStatus('BÀI HÁT ĐÃ KẾT THÚC');
+                        }
+                    },
+                    onError: () => { tyMusicState(false); tyMusicStatus('VIDEO KHÔNG PHÁT ĐƯỢC — HÃY THỬ BÀI KHÁC'); }
+                }
+            });
+            return true;
+        }
+        function tyMusicSelectQuery(sentence) {
+            const value = String(sentence || '').trim();
+            const normalized = normalizeSpoken(value);
+            if (/^(tu uyen\s+)?(dung nhac|tat nhac|ngung nhac|thoi phat nhac)(\s+di)?$/.test(normalized)) return {kind:'stop'};
+            if (/^(tu uyen\s+)?(tam dung nhac|dung phat nhac)(\s+di)?$/.test(normalized)) return {kind:'pause'};
+            if (/^(tu uyen\s+)?(tiep tuc phat nhac|phat tiep nhac)(\s+di)?$/.test(normalized)) return {kind:'resume'};
+            // Conservative: explicit music intent only, no accidental search for normal questions.
+            const match = value.match(/^(?:Tử\s*Uyên[\s,ơi]*[,:]?\s*)?(?:hãy\s+)?(?:tìm\s+(?:và\s+)?phát|tìm|mở|phát|bật|cho\s+(?:ta|tôi)\s+nghe)\s+(?:(?:cho\s+(?:ta|tôi)\s+)?(?:bài\s+hát|bài\s+nhạc|bài|nhạc)\s+)(.+)$/iu);
+            if (!match) return null;
+            const title = match[1].trim().replace(/[.?!]+$/, '').trim();
+            if (title.length < 2 || title.length > 120) return null;
+            return {kind:'search', query:title};
+        }
+        async function tyMusicSearchAndCue(query) {
+            const request = ++tyMusicRequest;
+            tyMusicBusy = true;
+            tyMusicState(false);
+            setRobotState('thinking');
+            tyMusicStatus('TỬ UYÊN ĐANG TÌM NHẠC…');
+            try {
+                const response = await fetch('/api/music/search', {
+                    method:'POST',
+                    headers:{'Content-Type':'application/json', ...authHeaders()},
+                    body:JSON.stringify({query})
+                });
+                if (response.status === 401 || response.status === 403) {
+                    showAuth('Cần đăng nhập để tìm nhạc.'); return;
+                }
+                if (!response.ok) throw new Error('HTTP '+response.status);
+                const data = await response.json();
+                if (request !== tyMusicRequest) return;
+                if (!data.ok || !Array.isArray(data.results) || !data.results.length) {
+                    tyMusicStatus('KHÔNG TÌM THẤY BÀI PHÙ HỢP'); return;
+                }
+                const song = data.results[0];
+                if (!/^[A-Za-z0-9_-]{11}$/.test(song.videoId)) throw new Error('Invalid video ID');
+                tyMusicVideo = song.videoId;
+                tyMusicCaption.textContent = song.title + ' — ' + song.channel;
+                tyMusicPanel.style.display = 'block';
+                tyMusicLoadApi();
+                if (tyMusicApiReady) tyMusicCreatePlayer(song.videoId);
+                else {
+                    tyMusicStatus('ĐÃ TÌM THẤY — ĐANG TẢI TRÌNH PHÁT…');
+                    let tries = 0;
+                    const wait = setInterval(() => {
+                        if (request !== tyMusicRequest) { clearInterval(wait); return; }
+                        if (tyMusicApiReady || (window.YT && window.YT.Player)) {
+                            clearInterval(wait); tyMusicCreatePlayer(song.videoId);
+                        } else if (++tries >= 40) {
+                            clearInterval(wait); tyMusicStatus('KHÔNG TẢI ĐƯỢC YOUTUBE PLAYER');
+                        }
+                    }, 250);
+                }
+                // Do not claim video is playing: playback can require Android user gesture.
+            } catch (error) {
+                if (request === tyMusicRequest) tyMusicStatus('KHÔNG TÌM ĐƯỢC NHẠC — KIỂM TRA CẤU HÌNH / API');
+            } finally {
+                tyMusicBusy = false;
+                if (request === tyMusicRequest) { setRobotState('idle'); if (tyMusicVideo) tyMusicStatus('ĐÃ TÌM THẤY — CHẠM ▶ ĐỂ PHÁT'); }
+            }
+        }
+
         // 4. XỬ LÝ CÂU HỎI VÀ PHÁT ÂM THANH TRẢ LỜI (GIỮ NGUYÊN 100% V3.7)
         async function handleUserSpeech(query) {
             if (authRequired && !founderToken) { showAuth('Vui lòng đăng nhập.'); return; }
@@ -1355,6 +1512,21 @@ function setAvatarMode(mode) {
                 return;
             }
 
+            // Music commands bypass LLM and the Supabase dialogue/memory pipeline.
+            const musicAction = tyMusicSelectQuery(query);
+            if (musicAction) {
+                invalidatePendingReply();
+                if (musicAction.kind === 'stop') { tyMusicStop(); return; }
+                if (musicAction.kind === 'pause') { tyMusicPause(); return; }
+                if (musicAction.kind === 'resume') { tyMusicResume(); return; }
+                if (musicAction.kind === 'search') {
+                    stopAllPlayback();
+                    if (tyMusicPlayer) tyMusicPlayer.stopVideo();
+                    await tyMusicSearchAndCue(musicAction.query);
+                    return;
+                }
+            }
+            if (tyMusicVideo) tyMusicPause();
             invalidatePendingReply();
             stopAllPlayback();
             const epoch = responseEpoch;
