@@ -40,6 +40,64 @@ FREE_VOICES = {
 
 DEFAULT_MODEL = "gpt-4o-mini"
 
+# TY-MUSIC B1 — YouTube search only; opt-in, no playback/LLM/memory changes.
+# Searches cost 100 YouTube quota units each; cap usage conservatively.
+TY_MUSIC_ENABLED = os.getenv("TY_MUSIC_ENABLED", "0").strip() == "1"
+TY_YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
+MUSIC_LOCK = threading.Lock()
+MUSIC_SEARCH_TIMES = []  # process-local limiter; not a global quota guarantee
+MUSIC_MAX_PER_HOUR = 8
+MUSIC_MAX_PER_DAY = 20
+
+
+def _reserve_music_search():
+    """Bound request count; fail closed to protect API quota."""
+    now = time.monotonic()
+    with MUSIC_LOCK:
+        MUSIC_SEARCH_TIMES[:] = [t for t in MUSIC_SEARCH_TIMES if now - t < 86400]
+        last_hour = sum(now - t < 3600 for t in MUSIC_SEARCH_TIMES)
+        if len(MUSIC_SEARCH_TIMES) >= MUSIC_MAX_PER_DAY or last_hour >= MUSIC_MAX_PER_HOUR:
+            return False
+        MUSIC_SEARCH_TIMES.append(now)
+        return True
+
+
+def _youtube_find_music(query):
+    """Return public embeddable video metadata, never media streams."""
+    result = requests.get(
+        "https://www.googleapis.com/youtube/v3/search",
+        params={
+            "key": TY_YOUTUBE_API_KEY,
+            "part": "snippet",
+            "q": query,
+            "type": "video",
+            "videoEmbeddable": "true",
+            "videoSyndicated": "true",
+            "regionCode": "VN",
+            "relevanceLanguage": "vi",
+            "maxResults": 5,
+            "safeSearch": "moderate",
+        },
+        timeout=(4, 12),
+    )
+    if result.status_code != 200:
+        logger.warning("[TY-MUSIC] SEARCH_HTTP_ERROR status=%s", result.status_code)
+        raise RuntimeError("YouTube lookup failed")
+    payload = result.json()
+    found = []
+    for item in payload.get("items", []):
+        video_id = (item.get("id") or {}).get("videoId", "")
+        snippet = item.get("snippet") or {}
+        if (isinstance(video_id, str) and len(video_id) == 11
+                and all(ch.isalnum() or ch in "_-" for ch in video_id)):
+            found.append({
+                "videoId": video_id,
+                "title": str(snippet.get("title", ""))[:200],
+                "channel": str(snippet.get("channelTitle", ""))[:120],
+            })
+    return found
+
+
 # TY-LLM-CHOICE V1: OpenAI is a manually selectable alternative, not automatic fallback.
 OPENAI_MODEL = "gpt-6-luna"
 OPENAI_API_URL = "https://api.openai.com/v1/responses"
@@ -1101,6 +1159,39 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 logger.warning("[TY-MEM-4D] UPDATE_FAILED class=%s", type(exc).__name__)
                 self._deny(503, "Memory review unavailable")
+            return
+
+        if self.path == "/api/music/search":
+            # Music search is always founder-only, including when legacy auth
+            # is disabled for other endpoints. Avoid a public quota-spend API.
+            if not TY_MUSIC_ENABLED:
+                self._deny(404, "Music search disabled")
+                return
+            if not (AUTH_ENFORCED and AUTH_READY):
+                self._deny(503, "Founder authentication required for music")
+                return
+            if not self._require_founder():
+                return
+            if not TY_YOUTUBE_API_KEY:
+                self._deny(503, "YouTube search not configured")
+                return
+            data = self._read_json(2048)
+            if data is None:
+                return
+            query = data.get("query")
+            if not isinstance(query, str) or not (2 <= len(query.strip()) <= 120):
+                self._deny(400, "Query must contain 2-120 characters")
+                return
+            if not _reserve_music_search():
+                self._deny(429, "Music search limit reached; try again later")
+                return
+            try:
+                songs = _youtube_find_music(query.strip())
+                logger.info("[TY-MUSIC] SEARCH_OK results=%d", len(songs))
+                self.send_rpg_json({"ok": True, "results": songs})
+            except (requests.RequestException, ValueError, RuntimeError, TypeError):
+                logger.warning("[TY-MUSIC] SEARCH_UNAVAILABLE")
+                self._deny(502, "Music search temporarily unavailable")
             return
 
         if self.path == "/api/chat":
