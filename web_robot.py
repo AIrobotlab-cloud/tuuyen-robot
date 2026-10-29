@@ -204,6 +204,55 @@ def _speechify_test_audio():
     return audio_data
 
 
+# TY-ENGLISH-TUTOR V1 — isolated, founder-only; no Supabase writes.
+from collections import deque as _TutorDeque
+from ty_english_tutor import tutor_prompt
+TY_ENGLISH_TUTOR_ENABLED = os.getenv("TY_ENGLISH_TUTOR_ENABLED", "0").strip() == "1"
+TY_TUTOR_HISTORY = _TutorDeque(maxlen=8)
+TY_TUTOR_TTS_LOCK = threading.Lock()
+TY_TUTOR_TTS_TIMES = []
+TY_TUTOR_TTS_MAX_DAY = 20  # per process, conservative test limiter
+
+
+def _tutor_tts_reserve():
+    now = time.monotonic()
+    with TY_TUTOR_TTS_LOCK:
+        TY_TUTOR_TTS_TIMES[:] = [t for t in TY_TUTOR_TTS_TIMES if now-t < 86400]
+        if len(TY_TUTOR_TTS_TIMES) >= TY_TUTOR_TTS_MAX_DAY:
+            return False
+        TY_TUTOR_TTS_TIMES.append(now)
+        return True
+
+
+def _tutor_speechify(text):
+    """Only generated, length-limited tutor speech is sent to Speechify."""
+    from xml.sax.saxutils import escape
+    if not SPEECHIFY_API_KEY or not _tutor_tts_reserve():
+        return None
+    ssml = '<speak><prosody rate="-15%">' + escape(text) + '</prosody></speak>'
+    try:
+        response = requests.post(
+            "https://api.speechify.ai/v1/audio/speech",
+            headers={"Authorization": "Bearer " + SPEECHIFY_API_KEY,
+                     "Content-Type": "application/json", "Accept": "application/json"},
+            json={"input": ssml, "voice_id": SPEECHIFY_TEST_VOICE_ID,
+                  "model": SPEECHIFY_TEST_MODEL, "language": "en-US", "audio_format": "mp3"},
+            timeout=(5, 30),
+        )
+        if response.status_code != 200:
+            logger.warning("[TY-TUTOR] TTS_HTTP status=%s", response.status_code)
+            return None
+        result = response.json()
+        audio = result.get("audio_data")
+        if not isinstance(audio, str) or not (500 < len(audio) <= 8_000_000):
+            return None
+        raw = base64.b64decode(audio, validate=True)
+        return audio if 500 <= len(raw) <= 6_000_000 else None
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        logger.warning("[TY-TUTOR] TTS_FAILED type=%s", type(exc).__name__)
+        return None
+
+
 # ElevenLabs: API key only on Render server. Voice ID can be changed later.
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "").strip()
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb").strip()
@@ -1218,6 +1267,59 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 logger.warning("[TY-MEM-4D] UPDATE_FAILED class=%s", type(exc).__name__)
                 self._deny(503, "Memory review unavailable")
+            return
+
+        if self.path == "/api/english/tutor":
+            if not TY_ENGLISH_TUTOR_ENABLED:
+                self._deny(404, "English tutor disabled")
+                return
+            if not (AUTH_ENFORCED and AUTH_READY):
+                self._deny(503, "Founder authentication required")
+                return
+            if not self._require_founder():
+                return
+            data = self._read_json(4096)
+            if data is None:
+                return
+            utterance = data.get("message", "")
+            model = data.get("model", DEFAULT_MODEL)
+            reset = data.get("reset", False)
+            if (not isinstance(utterance, str) or len(utterance) > 600
+                    or model not in ("gpt-4o-mini", "gpt-4o", OPENAI_MODEL)
+                    or not isinstance(reset, bool)):
+                self._deny(400, "Invalid tutor request")
+                return
+            utterance = utterance.strip()
+            if len(utterance) < 2 and not reset:
+                self._deny(400, "Empty learner message")
+                return
+            # Protect bot_brain's shared model choice and isolate tutor turns.
+            try:
+                with BRAIN_LOCK:
+                    if reset:
+                        TY_TUTOR_HISTORY.clear()
+                    instance_id, base_prompt = bot_brain.get_instance_context()
+                    # Keep verified identity and personality; no tutor progress database access.
+                    base_prompt += "\n\n" + bot_brain.get_verified_memories(instance_id)
+                    payload = [{"role": "system", "content": tutor_prompt(base_prompt)}]
+                    payload.extend(list(TY_TUTOR_HISTORY))
+                    question = utterance or "Start my beginner English lesson."
+                    payload.append({"role": "user", "content": question})
+                    bot_brain.AI_MODEL = model
+                    response = call_openai_luna(payload) if model == OPENAI_MODEL else bot_brain.call_ai_model(payload)
+                    if not isinstance(response, str) or not response.strip():
+                        raise RuntimeError("No tutor reply")
+                    reply = response.strip()[:450]
+                    TY_TUTOR_HISTORY.append({"role": "user", "content": question})
+                    TY_TUTOR_HISTORY.append({"role": "assistant", "content": reply})
+                # Outside BRAIN_LOCK: slow external TTS must not block normal chat.
+                # For mixed-language replies Speechify may pronounce Vietnamese imperfectly.
+                audio = _tutor_speechify(reply[:300])
+                self.send_rpg_json({"ok": True, "reply": reply, "audio": audio,
+                                    "fallback": "browser-en-US" if audio is None else None})
+            except Exception as exc:
+                logger.warning("[TY-TUTOR] FAILED type=%s", type(exc).__name__)
+                self._deny(502, "Tutor temporarily unavailable")
             return
 
         if self.path == "/api/english/tts-test":

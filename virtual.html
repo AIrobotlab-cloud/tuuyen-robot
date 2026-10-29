@@ -415,6 +415,7 @@ body.ty-view-3d #avatarStage { display:none; }
 
     <div id="mobile-reply" aria-live="polite" style="display:none;position:relative;width:min(94vw,600px);max-height:16vh;overflow:auto;padding:8px 12px;border:1px solid #1e40af;border-radius:10px;background:#0f172a;font-size:13px;line-height:1.4;color:#e2e8f0;user-select:text"></div>
     <div id="voice-action-bar" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:6px auto 10px">
+        <button type="button" id="ty-tutor-toggle" aria-pressed="false" style="border-radius:9px;padding:9px 14px;background:#14532d;color:#fff;border:1px solid #22c55e">📘 Học tiếng Anh: TẮT</button>
         <button type="button" id="voice-stop" style="border-radius:9px;padding:9px 14px;background:#26354e;color:#fff;border:1px solid #55708b">■ Dừng đọc</button>
         <button type="button" id="voice-replay" style="border-radius:9px;padding:9px 14px;background:#164e63;color:#fff;border:1px solid #4b9db0">↻ Đọc lại</button>
         <button type="button" id="voice-standby" aria-pressed="false" style="border-radius:9px;padding:9px 14px;background:#334155;color:#fff;border:1px solid #55708b">◉ Chờ gọi: TẮT</button>
@@ -663,6 +664,35 @@ body.ty-view-3d #avatarStage { display:none; }
 
 
 
+        // TY-ENGLISH-TUTOR V1 — opt-in dialogue via a dedicated, isolated API.
+        let tutorMode = false;
+        const tutorToggle = document.getElementById('ty-tutor-toggle');
+        let tutorFirstTurn = true;
+        tutorToggle.addEventListener('click', () => {
+            invalidatePendingReply(); stopAllPlayback(); stopEnglishTest();
+            tutorMode = !tutorMode;
+            tutorFirstTurn = tutorMode;
+            tutorToggle.textContent = tutorMode ? '📘 Học tiếng Anh: BẬT' : '📘 Học tiếng Anh: TẮT';
+            tutorToggle.setAttribute('aria-pressed', String(tutorMode));
+            tutorToggle.style.background = tutorMode ? '#166534' : '#14532d';
+            statusText.textContent = tutorMode ? 'ĐÃ BẬT GIA SƯ — CHẠM MIC ĐỂ BẮT ĐẦU' : 'ĐÃ THOÁT CHẾ ĐỘ HỌC';
+        });
+        function tutorBrowserVoice(text) {
+            if (!localTtsSupported) { reportVoiceError('ENGLISH_TTS_UNAVAILABLE'); return; }
+            stopLocalSpeech();
+            const run = localSpeechRun;
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'en-US';
+            utterance.rate = 0.85;
+            const en = (window.speechSynthesis.getVoices() || []).find(v => /^en[-_]US/i.test(v.lang));
+            if (en) utterance.voice = en;
+            utterance.onstart = () => { if (run === localSpeechRun) setRobotState('speaking'); };
+            const finish = () => { if (run === localSpeechRun) { isBusy=false; setRobotState('idle'); beginFollowupListening(); } };
+            utterance.onend = finish;
+            utterance.onerror = finish;
+            try { window.speechSynthesis.speak(utterance); }
+            catch (_) { finish(); }
+        }
         let currentModel = 'gpt-4o-mini';
         let isListening = false;
         let isBusy = false;
@@ -1328,6 +1358,7 @@ function setAvatarMode(mode) {
             try {
                 recognizerStarting = true;
                 recognizerStartAt = Date.now();
+                recognition.lang = tutorMode ? 'en-US' : 'vi-VN';
                 recognition.start();
             } catch (e) {
                 recognizerStarting = false;
@@ -1642,14 +1673,15 @@ function setAvatarMode(mode) {
             setRobotState('thinking');
 
             try {
-                const response = await fetch('/api/chat', {
+                const response = await fetch(tutorMode ? '/api/english/tutor' : '/api/chat', {
                     signal: controller.signal,
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', ...authHeaders() },
                     body: JSON.stringify({ 
                         message: query.trim(), 
                         model: currentModel,
-                        voice: voiceForRequest 
+                        voice: voiceForRequest,
+                        ...(tutorMode ? {reset: tutorFirstTurn} : {})
                     })
                 });
 
@@ -1664,11 +1696,15 @@ function setAvatarMode(mode) {
                 if (epoch !== responseEpoch || controller.signal.aborted) return;
                 activeChatController = null;
 
-                // Cập nhật lại điểm EXP và tiến độ nhiệm vụ trên huy hiệu sau mỗi câu trả lời
-                loadRpgStatus();
+                if (tutorMode) tutorFirstTurn = false;
+                // Tutor dialogue is isolated from RPG / Supabase conversation writes.
+                if (!tutorMode) loadRpgStatus();
 
                 displayReply(data.reply, voiceForRequest);
-                if (voiceForRequest === 'google_local') {
+                if (tutorMode) {
+                    if (data.audio) playReplyAudio(data.audio);
+                    else tutorBrowserVoice(data.reply);
+                } else if (voiceForRequest === 'google_local') {
                     speakWithAndroid(data.reply);
                 } else if (data.audio) {
                     playReplyAudio(data.audio);
