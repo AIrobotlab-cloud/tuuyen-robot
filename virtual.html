@@ -418,6 +418,7 @@ body.ty-view-3d #avatarStage { display:none; }
         <button type="button" id="voice-stop" style="border-radius:9px;padding:9px 14px;background:#26354e;color:#fff;border:1px solid #55708b">■ Dừng đọc</button>
         <button type="button" id="voice-replay" style="border-radius:9px;padding:9px 14px;background:#164e63;color:#fff;border:1px solid #4b9db0">↻ Đọc lại</button>
         <button type="button" id="voice-standby" aria-pressed="false" style="border-radius:9px;padding:9px 14px;background:#334155;color:#fff;border:1px solid #55708b">◉ Chờ gọi: TẮT</button>
+        <button type="button" id="ty-english-voice-test" style="border-radius:9px;padding:9px 14px;background:#065f46;color:#fff;border:1px solid #34d399" aria-label="Thử giọng Anh Mỹ bằng Speechify">🔊 Thử giọng Anh–Mỹ</button>
     </div>
     <div class="controls">
         <button class="mic-btn" id="mic-btn" onclick="toggleVoiceSession()">
@@ -573,6 +574,94 @@ body.ty-view-3d #avatarStage { display:none; }
             finally { btn.disabled = false; }
         });
         initAuth();
+
+        // TY-ENGLISH-VOICE TEST V1 — independent, opt-in playback.
+        // Uses existing in-memory Founder token; never exposes SPEECHIFY_API_KEY.
+        const englishTestBtn = document.getElementById('ty-english-voice-test');
+        const englishTestAudio = new Audio();
+        englishTestAudio.preload = 'none';
+        let englishTestLoading = false;
+        let englishTestUrl = null;
+        let englishTestController = null;
+        function stopEnglishTest() {
+            if (englishTestController) { englishTestController.abort(); englishTestController = null; }
+            englishTestAudio.pause();
+            englishTestAudio.removeAttribute('src');
+            englishTestAudio.load();
+            if (englishTestUrl) { URL.revokeObjectURL(englishTestUrl); englishTestUrl = null; }
+            englishTestLoading = false;
+            englishTestBtn.textContent = '🔊 Thử giọng Anh–Mỹ';
+            englishTestBtn.disabled = false;
+        }
+        englishTestAudio.addEventListener('ended', () => {
+            stopEnglishTest();
+            statusText.textContent = 'ĐÃ PHÁT XONG GIỌNG ANH–MỸ';
+        });
+        englishTestAudio.addEventListener('error', () => {
+            stopEnglishTest();
+            statusText.textContent = 'LỖI PHÁT MP3 SPEECHIFY';
+        });
+        englishTestBtn.addEventListener('click', async () => {
+            if (englishTestLoading) return;
+            if (!englishTestAudio.paused) {
+                stopEnglishTest();
+                statusText.textContent = 'ĐÃ DỪNG GIỌNG THỬ';
+                return;
+            }
+            if (!founderToken) {
+                statusText.textContent = 'CẦN ĐĂNG NHẬP FOUNDER ĐỂ THỬ GIỌNG';
+                return;
+            }
+            if (isBusy || isListening || listenMode !== 'off') {
+                statusText.textContent = 'HÃY DỪNG HỘI THOẠI / MICRO TRƯỚC KHI THỬ GIỌNG';
+                return;
+            }
+            englishTestLoading = true;
+            englishTestBtn.disabled = true;
+            englishTestBtn.textContent = '⏳ Đang tạo giọng...';
+            statusText.textContent = 'ĐANG GỌI SPEECHIFY…';
+            const controller = new AbortController();
+            englishTestController = controller;
+            try {
+                const response = await fetch('/api/english/tts-test', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json', ...authHeaders()},
+                    body: '{}',
+                    cache: 'no-store',
+                    signal: controller.signal
+                });
+                if (response.status === 401 || response.status === 403) {
+                    showAuth('Phiên đăng nhập hết hạn. Vui lòng đăng nhập lại.');
+                    throw new Error('CẦN ĐĂNG NHẬP LẠI');
+                }
+                if (!response.ok) throw new Error('SPEECHIFY HTTP ' + response.status);
+                const result = await response.json();
+                if (!result.ok || typeof result.audio !== 'string' || !result.audio.length) {
+                    throw new Error('SPEECHIFY KHÔNG TRẢ ÂM THANH');
+                }
+                const binary = atob(result.audio);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                englishTestUrl = URL.createObjectURL(new Blob([bytes], {type:'audio/mpeg'}));
+                englishTestAudio.src = englishTestUrl;
+                // Backend already requests 0.85x via SSML; do not slow it twice.
+                englishTestAudio.playbackRate = 1.0;
+                englishTestLoading = false;
+                englishTestBtn.disabled = false;
+                englishTestBtn.textContent = '■ Dừng giọng thử';
+                await englishTestAudio.play();
+                statusText.textContent = 'ĐANG PHÁT GIỌNG ANH–MỸ';
+            } catch (error) {
+                const message = error && error.message ? error.message : 'LỖI KHÔNG XÁC ĐỊNH';
+                stopEnglishTest();
+                statusText.textContent = message;
+                console.warn('[TY-SPEECHIFY-TEST] failed', message);
+            } finally {
+                if (englishTestController === controller) englishTestController = null;
+            }
+        });
+
+
 
         let currentModel = 'gpt-4o-mini';
         let isListening = false;
