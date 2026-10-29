@@ -417,6 +417,8 @@ body.ty-view-3d #avatarStage { display:none; }
     <div id="voice-action-bar" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:6px auto 10px">
         <button type="button" id="ty-tutor-toggle" aria-pressed="false" style="border-radius:9px;padding:9px 14px;background:#14532d;color:#fff;border:1px solid #22c55e">📘 Học tiếng Anh: TẮT</button>
         <button type="button" id="ty-tutor-mic-lang" hidden aria-label="Chuyển ngôn ngữ nhận dạng giọng trong chế độ học" aria-pressed="false" style="border-radius:9px;padding:9px 14px;background:#1e3a8a;color:#fff;border:1px solid #60a5fa">🎙️ Mic: 🇺🇸 English</button>
+        <button type="button" id="ty-tutor-finish" hidden style="border-radius:9px;padding:9px 14px;background:#065f46;color:#fff;border:1px solid #34d399">✓ Trả lời xong</button>
+        <button type="button" id="ty-tutor-clear" hidden style="border-radius:9px;padding:9px 14px;background:#374151;color:#fff;border:1px solid #9ca3af">↺ Nói lại</button>
         <button type="button" id="voice-stop" style="border-radius:9px;padding:9px 14px;background:#26354e;color:#fff;border:1px solid #55708b">■ Dừng đọc</button>
         <button type="button" id="voice-replay" style="border-radius:9px;padding:9px 14px;background:#164e63;color:#fff;border:1px solid #4b9db0">↻ Đọc lại</button>
         <button type="button" id="voice-standby" aria-pressed="false" style="border-radius:9px;padding:9px 14px;background:#334155;color:#fff;border:1px solid #55708b">◉ Chờ gọi: TẮT</button>
@@ -671,6 +673,39 @@ body.ty-view-3d #avatarStage { display:none; }
         const tutorToggle = document.getElementById('ty-tutor-toggle');
         const tutorMicLangBtn = document.getElementById('ty-tutor-mic-lang');
         let tutorFirstTurn = true;
+        // TY-TUTOR V1.2: accumulate final ASR chunks; do NOT submit on a short pause.
+        let tutorSpokenParts = [];
+        const tutorFinish = document.getElementById('ty-tutor-finish');
+        const tutorClear = document.getElementById('ty-tutor-clear');
+        function resetTutorDraft() {
+            tutorSpokenParts = [];
+            interimTranscript = '';
+            tutorFinish.disabled = false;
+            tutorFinish.textContent = '✓ Trả lời xong';
+        }
+        function refreshTutorDraft() {
+            const spoken = tutorSpokenParts.join(' ').trim();
+            tutorFinish.hidden = !tutorMode;
+            tutorClear.hidden = !tutorMode;
+            tutorFinish.disabled = !spoken;
+            if (tutorMode && spoken) statusText.textContent = 'ĐÃ NGHE ' + spoken.split(/\s+/).length + ' TỪ — NÓI TIẾP HOẶC NHẤN TRẢ LỜI XONG';
+        }
+        tutorFinish.addEventListener('click', () => {
+            if (!tutorMode || isBusy) return;
+            const spoken = tutorSpokenParts.join(' ').trim();
+            if (!spoken) return;
+            shutdownRecognition();
+            resetTutorDraft();
+            refreshTutorDraft();
+            handleUserSpeech(spoken);
+        });
+        tutorClear.addEventListener('click', () => {
+            if (!tutorMode || isBusy) return;
+            resetTutorDraft();
+            refreshTutorDraft();
+            statusText.textContent = 'ĐÃ XÓA CÂU — CÓ THỂ NÓI LẠI';
+        });
+
         function updateTutorMicLanguage() {
             tutorMicLangBtn.hidden = !tutorMode;
             tutorMicLangBtn.textContent = tutorMicLang === 'en-US' ? '🎙️ Mic: 🇺🇸 English' : '🎙️ Mic: 🇻🇳 Tiếng Việt';
@@ -682,6 +717,8 @@ body.ty-view-3d #avatarStage { display:none; }
             invalidatePendingReply();
             stopAllPlayback();
             stopEnglishTest();
+            resetTutorDraft();
+            refreshTutorDraft();
             tutorMicLang = tutorMicLang === 'en-US' ? 'vi-VN' : 'en-US';
             updateTutorMicLanguage();
             statusText.textContent = tutorMicLang === 'en-US'
@@ -691,6 +728,8 @@ body.ty-view-3d #avatarStage { display:none; }
         tutorToggle.addEventListener('click', () => {
             invalidatePendingReply(); stopAllPlayback(); stopEnglishTest();
             tutorMode = !tutorMode;
+            resetTutorDraft();
+            refreshTutorDraft();
             tutorFirstTurn = tutorMode;
             tutorMicLang = 'en-US';
             updateTutorMicLanguage();
@@ -793,17 +832,17 @@ body.ty-view-3d #avatarStage { display:none; }
             }, delay);
         }
         function listenDeadlineReached() {
-            return listenMode === 'followup' && !speechInProgress &&
+            return !tutorMode && listenMode === 'followup' && !speechInProgress &&
                 followupDeadline > 0 && Date.now() >= followupDeadline;
         }
         function armFollowupIdleTimer() {
             if (followupTimer) clearTimeout(followupTimer);
             followupTimer = null;
-            if (listenMode !== 'followup' || isBusy || speechInProgress) return;
+            if (listenMode !== 'followup' || isBusy || speechInProgress || tutorMode) return;
             followupDeadline = Date.now() + FOLLOWUP_MS;
             followupTimer = setTimeout(() => {
                 followupTimer = null;
-                if (listenMode !== 'followup' || isBusy || speechInProgress) return;
+                if (listenMode !== 'followup' || isBusy || speechInProgress || tutorMode) return;
                 if (!listenDeadlineReached()) return;
                 const wasListening = followupEverStarted;
                 shutdownRecognition();
@@ -1300,6 +1339,17 @@ function setAvatarMode(mode) {
                 }
                 recognitionHadResult = true;
                 interimTranscript = '';
+                if (tutorMode && listenMode === 'followup') {
+                    // Chrome finalizes after short silences; keep chunks until explicit Finish.
+                    if (tutorSpokenParts.join(' ').length + spoken.length < 650) {
+                        const previous = tutorSpokenParts[tutorSpokenParts.length - 1];
+                        if (previous !== spoken) tutorSpokenParts.push(spoken);
+                    }
+                    speechInProgress = false;
+                    refreshTutorDraft();
+                    // Let recognition.onend restart listening, without asking the tutor yet.
+                    return;
+                }
                 voiceTrace('final-result');
                 if (isSleepCommand(spoken)) {
                     shutdownRecognition();
@@ -1342,7 +1392,17 @@ function setAvatarMode(mode) {
                 voiceTrace('end', recognitionHadResult ? 'final' : (interimTranscript ? 'interim-only' : 'no-transcript'));
                 // The browser may end long speech without a final transcript.
                 // Preserve the interim instead of silently discarding it or claiming silence.
-                if (listenMode === 'followup' && !recognitionHadResult && interimTranscript) {
+                if (tutorMode && listenMode === 'followup' && !recognitionHadResult && interimTranscript) {
+                    const partial = interimTranscript.trim();
+                    if (partial && tutorSpokenParts.join(' ').length + partial.length < 650) {
+                        const last = tutorSpokenParts[tutorSpokenParts.length - 1];
+                        if (partial !== last) tutorSpokenParts.push(partial);
+                    }
+                    interimTranscript = '';
+                    speechInProgress = false;
+                    refreshTutorDraft();
+                }
+                if (listenMode === 'followup' && !recognitionHadResult && interimTranscript && !tutorMode) {
                     const recovered = interimTranscript;
                     speechInProgress = false;
                     followupDeadline = 0;
@@ -1505,7 +1565,7 @@ function setAvatarMode(mode) {
                 }
                 beginFollowupListening();
             }
-            else { shutdownRecognition(); statusText.textContent = 'NGHỈ — MICROPHONE ĐÃ TẮT'; }
+            else { shutdownRecognition(); statusText.textContent = tutorMode ? 'MIC TẠM DỪNG — CÂU ĐANG NÓI ĐƯỢC GIỮ' : 'NGHỈ — MICROPHONE ĐÃ TẮT'; }
         }
 
         // TY-MUSIC B2 — independent, opt-in YouTube search/player. No LLM or memory writes.
