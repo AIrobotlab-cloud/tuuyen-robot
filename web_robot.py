@@ -145,6 +145,65 @@ def call_openai_luna(messages_payload):
         logger.warning("[TY-OPENAI] INVALID_RESPONSE type=%s", type(exc).__name__)
         raise RuntimeError("OpenAI response invalid") from exc
 
+# TY-ENGLISH-VOICE TEST V1 — an isolated founder-only Speechify smoke test.
+# Default OFF; it never changes /api/chat, the character, memories, or voice selection.
+SPEECHIFY_TEST_ENABLED = os.getenv("TY_SPEECHIFY_TEST_ENABLED", "0").strip() == "1"
+SPEECHIFY_API_KEY = os.getenv("SPEECHIFY_API_KEY", "").strip()
+SPEECHIFY_TEST_VOICE_ID = os.getenv("SPEECHIFY_VOICE_ID", "geffen_32").strip()
+SPEECHIFY_TEST_MODEL = "simba-3.2"
+SPEECHIFY_TEST_TEXT = "Hello! How are you today? I'm happy to practice English with you."
+SPEECHIFY_TEST_LOCK = threading.Lock()
+SPEECHIFY_TEST_CALLS = []
+SPEECHIFY_TEST_MAX_HOUR = 6
+
+
+def _speechify_test_reserve():
+    now = time.monotonic()
+    with SPEECHIFY_TEST_LOCK:
+        SPEECHIFY_TEST_CALLS[:] = [t for t in SPEECHIFY_TEST_CALLS if now - t < 3600]
+        if len(SPEECHIFY_TEST_CALLS) >= SPEECHIFY_TEST_MAX_HOUR:
+            return False
+        SPEECHIFY_TEST_CALLS.append(now)
+        return True
+
+
+def _speechify_test_audio():
+    """Generate one fixed English sample. No arbitrary user text or LLM output."""
+    from xml.sax.saxutils import escape
+    if not SPEECHIFY_API_KEY:
+        raise RuntimeError("Speechify API key missing")
+    # Speechify supports speech rate via SSML prosody.
+    ssml = '<speak><prosody rate="-15%">' + escape(SPEECHIFY_TEST_TEXT) + '</prosody></speak>'
+    response = requests.post(
+        "https://api.speechify.ai/v1/audio/speech",
+        headers={
+            "Authorization": "Bearer " + SPEECHIFY_API_KEY,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        json={
+            "input": ssml,
+            "voice_id": SPEECHIFY_TEST_VOICE_ID,
+            "model": SPEECHIFY_TEST_MODEL,
+            "language": "en-US",
+            "audio_format": "mp3",
+        },
+        timeout=(5, 30),
+    )
+    if response.status_code != 200:
+        logger.warning("[TY-SPEECHIFY-TEST] API_HTTP_ERROR status=%s", response.status_code)
+        raise RuntimeError("Speechify test unavailable")
+    result = response.json()
+    audio_data = result.get("audio_data")
+    if not isinstance(audio_data, str) or not audio_data or len(audio_data) > 8_000_000:
+        raise RuntimeError("Speechify audio data invalid")
+    audio_bytes = base64.b64decode(audio_data, validate=True)
+    if not (500 <= len(audio_bytes) <= 6_000_000):
+        raise RuntimeError("Speechify audio length invalid")
+    logger.info("[TY-SPEECHIFY-TEST] SUCCESS bytes=%d", len(audio_bytes))
+    return audio_data
+
+
 # ElevenLabs: API key only on Render server. Voice ID can be changed later.
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "").strip()
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb").strip()
@@ -1159,6 +1218,43 @@ class RobotWebHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 logger.warning("[TY-MEM-4D] UPDATE_FAILED class=%s", type(exc).__name__)
                 self._deny(503, "Memory review unavailable")
+            return
+
+        if self.path == "/api/english/tts-test":
+            # Founder-only even if legacy authentication is disabled elsewhere.
+            if not SPEECHIFY_TEST_ENABLED:
+                self._deny(404, "Speechify test disabled")
+                return
+            if not (AUTH_ENFORCED and AUTH_READY):
+                self._deny(503, "Founder authentication required")
+                return
+            if not self._require_founder():
+                return
+            if not SPEECHIFY_API_KEY:
+                self._deny(503, "Speechify key not configured")
+                return
+            data = self._read_json(256)
+            if data is None:
+                return
+            if data:  # Fixed sample only; avoid unbounded paid TTS text.
+                self._deny(400, "Send an empty JSON object")
+                return
+            if not _speechify_test_reserve():
+                self._deny(429, "Speechify test hourly limit reached")
+                return
+            try:
+                audio = _speechify_test_audio()
+                self.send_rpg_json({
+                    "ok": True,
+                    "audio": audio,
+                    "format": "mp3",
+                    "text": SPEECHIFY_TEST_TEXT,
+                    "voice_id": SPEECHIFY_TEST_VOICE_ID,
+                    "rate": 0.85,
+                })
+            except (requests.RequestException, ValueError, RuntimeError, TypeError) as exc:
+                logger.warning("[TY-SPEECHIFY-TEST] FAILED class=%s", type(exc).__name__)
+                self._deny(502, "Speechify test temporarily unavailable")
             return
 
         if self.path == "/api/music/search":
